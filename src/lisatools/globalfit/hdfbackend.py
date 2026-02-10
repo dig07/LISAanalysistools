@@ -1,6 +1,6 @@
 import numpy as np
 from eryn.backends import HDFBackend as eryn_HDFBackend
-from .state import GFState, MBHState, EMRIState, GBState
+from .state import GFState, MBHState, EMRIState, GBState, SOBBHState
 from .plot import RunResultsProduction
 import time
 import shutil
@@ -850,3 +850,110 @@ class EMRIHDFBackend(eryn_HDFBackend):
         return sample
 
     
+class SOBBHHDFBackend(eryn_HDFBackend):
+    """HDF5 backend for SoBBH sources.
+    
+    Stores per-leaf temperature ladders (betas_all).
+    """
+
+    def reset(self, nwalkers, *args, ntemps=1, num_sobbhs: int=None, **kwargs):
+        """Initialize HDF5 datasets for SoBBH."""
+        if num_sobbhs is None:
+            raise ValueError("Must provide num_sobbhs kwarg.")
+
+        # open file in append mode
+        with self.open("a") as f:
+            g = f[self.name]["sub_backend"]
+
+            sobbh_group = g.create_group("sobbh")
+
+            sobbh_group.attrs["num_sobbhs"] = num_sobbhs
+
+            sobbh_group.create_dataset(
+                "betas_all",
+                (0, num_sobbhs, ntemps),
+                maxshape=(None, num_sobbhs, ntemps),
+                dtype=self.dtype,
+                compression=self.compression,
+                compression_opts=self.compression_opts,
+            )
+
+    @property
+    def num_sobbhs(self):
+        """Get num_sobbhs from h5 file."""
+        with self.open() as f:
+            return f[self.name]["sub_backend"]["sobbh"].attrs["num_sobbhs"]
+
+    @property
+    def reset_kwargs(self):
+        """Get reset_kwargs from h5 file."""
+        return dict(
+            num_sobbhs=self.num_sobbhs
+        )
+
+    def grow(self, ngrow, *args):
+        """Grow the dataset by ngrow iterations."""
+        # open the file in append mode
+        with self.open("a") as f:
+            g = f[self.name]
+            sobbh_group = f[self.name]["sub_backend"]["sobbh"]
+            # resize all the arrays accordingly
+            ntot = g.attrs["iteration"] + ngrow
+            sobbh_group["betas_all"].resize(ntot, axis=0)
+
+    def get_value(self, name, thin=1, discard=0, slice_vals=None):
+        """Returns a requested value to user."""
+        # check if initialized
+        if not self.initialized:
+            raise AttributeError(
+                "You must run the sampler with "
+                "'store == True' before accessing the "
+                "results"
+            )
+
+        if name != "betas_all":
+            raise ValueError(f"No {name} in this backend.")
+
+        if slice_vals is None:
+            slice_vals = slice(discard + thin - 1, self.iteration, thin)
+
+        # open the file wrapped in a "with" statement
+        with self.open() as f:
+            # get the group that everything is stored in
+            g = f[self.name]
+            iteration = g.attrs["iteration"]
+            if iteration <= 0:
+                raise AttributeError(
+                    "You must run the sampler with "
+                    "'store == True' before accessing the "
+                    "results"
+                )
+
+            sobbh_group = g["sub_backend"]["sobbh"]
+            v_all = sobbh_group["betas_all"][slice_vals]
+        return v_all
+
+    def get_betas_all(self, **kwargs):
+        """Get the stored betas_all array."""
+        return self.get_value("betas_all", **kwargs)
+
+    def save_step(self, state, *args, **kwargs):
+        """Save current state to HDF5."""
+        # open for appending in with statement
+        with self.open("a") as f:
+            g = f[self.name]
+            # get the iteration left off on
+            # minus one because it was updated in the super function
+            iteration = g.attrs["iteration"] - 1
+            sobbh_group = g["sub_backend"]["sobbh"]
+            sobbh_group["betas_all"][iteration] = state.sub_states["sobbh"].betas_all
+
+    def get_a_sample(self, it):
+        """Access a sample in the chain at iteration it."""
+        thin = self.iteration - it if it != self.iteration else 1
+        discard = it + 1 - thin
+
+        betas_all = self.get_betas_all(discard=discard, thin=thin)
+
+        sample = SOBBHState(None, betas_all=betas_all)
+        return sample

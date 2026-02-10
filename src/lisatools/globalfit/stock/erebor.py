@@ -580,6 +580,154 @@ class GalForSetup(Setup):
     def init_setup(self):
         self.init_sampling_info()
 
+from ..hdfbackend import SOBBHHDFBackend
+from ..state import SOBBHState
+
+@dataclasses.dataclass
+class SOBBHSettings(Settings):
+    # TODO: I need to figure out how these parameter transformations work with the priors and the limits. 
+    m1_lims: typing.List[float, float] = None # Will transform to chirp mass (m1,m2)
+    m2_lims: typing.List[float, float] = None # Will transform to chirp mass (m1,m2)
+    e0_lims: typing.List[float, float] = None
+    f0_lims: typing.List[float, float] = None
+    s1_lims: typing.List[float, float] = None # Will transform to chi effective (s1,s2)
+    s2_lims: typing.List[float, float] = None # Will transform to chi effective (s1,s2)
+    D_lims: typing.List[float, float] = None
+    inc_lims: typing.List[float, float] = None
+    psi_lims: typing.List[float, float] = None
+    lam_lims: typing.List[float, float] = None
+    beta_lims: typing.List[float, float] = None
+    waveform_type: str = 'F2'  # or 'T2'
+    frequency_bounds: tuple = (1e-3, 1e-1)
+    nleaves_max: int = 10 # Not sure if/how I should use this 
+    nleaves_min: int = 0 # Not sure if/how I should use this 
+    ndim: int = 11  # number of parameters
+    inner_moves: Optional[typing.List[Move]] = None
+    num_prop_repeats: Optional[int] = 200
+
+class SOBBHSetup(Setup):
+    def __init__(self, sobbh_settings: SOBBHSettings):
+        
+        # had a better way to do this but it stopped allowing for pickle
+        super().__init__(sobbh_settings)
+
+        level = logging.DEBUG
+        name = "SOBBHSetup"
+        self.logger = init_logger(filename="sobbh_setup.log", level=level, name=name)
+        
+        self.init_setup()
+        
+    def init_sampling_info(self):
+
+
+
+        if self.transform is None:
+
+            # for transforms
+
+            # sobbh_fill_dict = { # Holding parameters constant 
+            # "ndim_full": 14,
+            # "fill_values": self.fill_values, # inclination and Phi_theta
+            # "fill_inds": np.array([5, 12]),
+            # }
+
+            # sobbh_transform_fn_in = {
+            #     0: np.exp,  # M 
+            #     7: np.arccos, # qS
+            #     9: np.arccos,  # qK
+            # }
+
+            # TODO: Worry about these later 
+            sobbh_fill_dict = {}
+            sobbh_transform_fn_in = {}
+
+            self.transform = TransformContainer(
+                parameter_transforms=sobbh_transform_fn_in, fill_dict=sobbh_fill_dict
+            )
+
+        if self.periodic is None:
+            #TODO: Worry about these later, indexes probably wrong 
+            self.periodic = {"sobbh": {
+                8: np.pi,      # psi: [0, π]
+                9: 2*np.pi,    # lam: [0, 2π]
+                10: np.pi,     # beta: [-π/2, π/2] wraps to π period
+            }}
+
+        self.setup_priors()
+        
+        if self.betas is None:
+            snrs_ladder = np.array([1.])
+            ntemps_pe = 1  # len(snrs_ladder)
+            betas = 1 / 1.2 ** np.arange(ntemps_pe)
+            self.betas = betas
+
+        self.logger.info(f"Using betas: {self.betas} in SOBBH branch")
+
+        # TODO: maybe combine this into Setup
+        if self.other_tempering_kwargs is None:
+            self.other_tempering_kwargs = dict(permute=False)
+
+        if "permute" not in self.other_tempering_kwargs:
+            self.other_tempering_kwargs["permute"] = False
+
+        assert not self.other_tempering_kwargs["permute"]
+
+        if self.initialize_kwargs is None:
+            self.initialize_kwargs = {}
+
+        if self.inner_moves is None:
+            from eryn.moves import StretchMove
+            self.inner_moves = [
+                (StretchMove(), 1.0)
+            ]
+
+    def setup_priors(self,):
+        """
+        Get the prior distributions for the SoBBH parameters.
+        override the default priors with custom boundaries for the intrinsic parameters. 
+
+        Args:
+
+        Returns:
+            ProbDistContainer: Container with prior distributions for each parameter.
+        """
+        # Need to do this in the transformed parameters, i.e chirp mass and chi effective. 
+            # Will need to figure this out 
+            # Also it should not all be uniform priors, e.g. inclination. 
+        priors_sobbh = {
+            0: uniform_dist(5, 100), #m1
+            1: uniform_dist(5, 100), #m2
+            2: uniform_dist(1.e-4, 1.e-1),  #e0 
+            3: uniform_dist(1e-3, 1e-1), #f0
+            4: uniform_dist(-0.99, 0.99), #s1
+            5: uniform_dist(-0.99, 0.99), #s2
+            6: uniform_dist(50.e+6, 300.e+6), # D (Mpc)
+            7: uniform_dist(0.0, np.pi), # inc
+            8: uniform_dist(0.0, np.pi), # psi
+            9: uniform_dist(0.0, 2 * np.pi), # lam
+            10: uniform_dist(-np.pi/2, np.pi/2), # beta
+        }
+
+        limits = ['m1_lims', 'm2_lims', 'e0_lims', 'f0_lims', 's1_lims', 's2_lims', 'D_lims', 'inc_lims', 'psi_lims', 'lam_lims', 'beta_lims']
+        for i, lims in enumerate(limits):
+            if getattr(self, lims) is not None:
+                self.logger.info(f'Setting prior for parameter {i} using limits {getattr(self, lims)}')
+                priors_sobbh[i] = uniform_dist(*getattr(self, lims))
+
+        self.priors = {"sobbh": ProbDistContainer(priors_sobbh)}
+
+    def init_setup(self):
+        self.init_sampling_info()
+        self.init_state_backend_info()
+
+    def init_state_backend_info(self):
+        if self.branch_state is None:
+            self.branch_state = SOBBHState
+        
+        if self.branch_backend is None:
+            self.branch_backend = SOBBHHDFBackend
+
+
 
 def get_galfor_erebor_settings(general_set: GeneralSetup) -> GalForSetup:
     
@@ -596,6 +744,7 @@ def get_galfor_erebor_settings(general_set: GeneralSetup) -> GalForSetup:
     )
 
     return GalForSetup(galfor_settings)
+
 
 
 if __name__ == "__main__":

@@ -230,6 +230,27 @@ class EMRIState(eryn_State):
             num_emris=1 #self.betas_all.shape[0]
         )
 
+class SOBBHState(eryn_State):
+    """State tracking for SoBBH sources.
+    
+    Tracks per-leaf temperature ladders if running multi-source analysis.
+    """
+    remove_kwargs = ["betas_all"]
+    
+    def __init__(self, possible_state, betas_all=None, copy=False, **kwargs):
+        if isinstance(possible_state, self.__class__):
+            dc = deepcopy if copy else return_x
+            self.betas_all = dc(possible_state.betas_all)
+        else:
+            self.betas_all = betas_all
+
+    @property
+    def reset_kwargs(self):
+        """Kwargs needed when resetting backend."""
+        return dict(
+            num_sobbhs=10,  # max number of SoBBH sources
+        )
+
 class GFState(eryn_State):
     # TODO: bandaid fix this
     def __init__(self, possible_state, *args, is_eryn_state_input:bool=False, sub_state_bases: dict=None, **kwargs):
