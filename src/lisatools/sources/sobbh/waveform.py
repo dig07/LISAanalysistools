@@ -349,7 +349,7 @@ class F2wrapper_custom_jax:
      
     Args:
         freqs: Array of frequencies at which to generate the waveform.
-        downsampling_factor: Factor by which to downsample the frequencies for waveform generation.
+        downsampling_factor: Factor by which to downsample the frequencies for waveform generation. NOT BEING USED IN THIS FUNCTION YET. 
         Tobs: Observation time in years.
         TDI: Type of TDI channels to use ('AET' or 'XYZ').
         force_backend: Backend to use for computation ('cuda12x' or 'cpu', see https://github.com/mikekatz04/BBHx/blob/dev/src/bbhx/response/fastfdresponse.py#L52-L53).
@@ -359,7 +359,7 @@ class F2wrapper_custom_jax:
     """
     def __init__(self,
                 freqs: np.ndarray,
-                downsampling_factor: Optional[int] = 1000,
+                downsampling_factor: Optional[int] = 1000, # Does absolutely nothing here. 
                 Tobs : Optional[float] = 1.0,
                 TDI: Optional[str] = 'AET',
                 force_backend: Optional[str] = 'cuda12x',
@@ -495,6 +495,7 @@ class SOBBHTDIWaveform(AETTDIWaveform):
         sobbh_waveform_args: Arguments for SOBBH waveform generator.
         sobbh_waveform_kwargs: Keyword arguments for SOBBH waveform generator.
         response_kwargs: Keyword arguments for :class:`ResponseWrapper`.
+        freqs: Frequencies at which to evaluate the waveform and response, only used for frequency domain waveforms not for Time-domain. If None, will be generated based on T and dt.
         frequency_bounds: (minimum,maximum) frequency for waveform (and response generation), only used for frequency domain waveforms not for Time-domain. 
 
     """
@@ -506,12 +507,22 @@ class SOBBHTDIWaveform(AETTDIWaveform):
         sobbh_waveform_args: Optional[tuple] = ('F2',),
         sobbh_waveform_kwargs: Optional[dict] = {},
         response_kwargs: Optional[dict] = td_default_response_kwargs,
+        freqs = None, 
         frequency_bounds: Optional[tuple]= (1.e-3,1.e-1),
     ): 
         ##### t0 what should it be. 
+
+
         self.times = jax.numpy.arange(0, T*YRSID_SI+dt, dt)
-        self.freqs = jax.numpy.fft.rfftfreq(self.times.size,d=dt)
         
+        # Want to jit the waveform wrt whateer frequencies are used here. 
+        if freqs is not None:
+            # If provided frequencies from the waveform generator use these. 
+            self.freqs = jax.numpy.asarray(freqs)
+        else:
+            # If not generate from times. 
+            self.freqs = jax.numpy.fft.rfftfreq(self.times.size,d=dt)
+
         if sobbh_waveform_args[0] == 'F2_custom':
             # Frequency domain (F2 + personal implementation of BBHx response with old analytic orbits!) NOTE: TEMPORARY!!!!
             

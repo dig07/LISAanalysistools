@@ -599,8 +599,8 @@ class SOBBHSettings(Settings):
     beta_lims: typing.List[float, float] = None
     waveform_type: str = 'F2'  # or 'T2'
     frequency_bounds: tuple = (1e-3, 1e-1)
-    nleaves_max: int = 10 # Not sure if/how I should use this 
-    nleaves_min: int = 0 # Not sure if/how I should use this 
+    nleaves_max: int = 6 # Not sure if/how I should use this (hard fixed to 6 for now as thats how many sources there are and we are not going to do RJMCMC)
+    nleaves_min: int = 6 # Not sure if/how I should use this (hard fixed to 6 for now as thats how many sources there are and we are not going to do RJMCMC)
     ndim: int = 11  # number of parameters
     inner_moves: Optional[typing.List[Move]] = None
     num_prop_repeats: Optional[int] = 200
@@ -639,6 +639,7 @@ class SOBBHSetup(Setup):
 
             # TODO: Worry about these later 
             sobbh_fill_dict = {}
+            # TODO: will need to transform from m1,m2 to chirp mass and mass ratio for the sampling, but I need to figure out how to do this with the priors and limits.
             sobbh_transform_fn_in = {}
 
             self.transform = TransformContainer(
@@ -650,12 +651,12 @@ class SOBBHSetup(Setup):
             self.periodic = {"sobbh": {
                 8: np.pi,      # psi: [0, π]
                 9: 2*np.pi,    # lam: [0, 2π]
-                10: np.pi,     # beta: [-π/2, π/2] wraps to π period
             }}
 
         self.setup_priors()
         
         if self.betas is None:
+            # TODO: NOTE: Currently defaulting to a single temperature for PE
             snrs_ladder = np.array([1.])
             ntemps_pe = 1  # len(snrs_ladder)
             betas = 1 / 1.2 ** np.arange(ntemps_pe)
