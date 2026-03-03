@@ -352,10 +352,10 @@ class F2wrapper_custom_jax:
         downsampling_factor: Factor by which to downsample the frequencies for waveform generation. NOT BEING USED IN THIS FUNCTION YET. 
         Tobs: Observation time in years.
         TDI: Type of TDI channels to use ('AET' or 'XYZ').
-        force_backend: Backend to use for computation ('cuda12x' or 'cpu', see https://github.com/mikekatz04/BBHx/blob/dev/src/bbhx/response/fastfdresponse.py#L52-L53).
         TDIversion: Version of TDI to use (1 or 2). Currently this is always set to 2, but the response does gen 1.5 which is good "enough" approximation to 2nd gen for now. 
         dt_orbit_reinterp: Time step in seconds for orbit resampling from cubic interpolation, needed for LISA response calculation.
-
+        response: Which implementation of the LISA response to use, either 'LISAtools' or 'Internal'. Same response just different implementations,
+            'LISAtools' uses the LISAtools is more accurate and uses the LISAtool interpolants (importantly also for the LTTs) (default is 'LISAtools').
     """
     def __init__(self,
                 freqs: np.ndarray,
@@ -366,16 +366,29 @@ class F2wrapper_custom_jax:
                 TDIversion: Optional[int] = 2,
                 dt_orbit_reinterp: Optional[float] = 600.0,
                 dt : Optional[float] = 10.0,
+                response = 'LISAtools', 
                 ):
 
         self.freqs = freqs
         self.downsampling_factor = downsampling_factor
         self.Tobs = Tobs*YRSID_SI
         self.force_backend = force_backend
-        
-        self.p_splines = LISA_response.Zero_order_response_fast_locally_constant.generate_mojito_orbit_splines(
-            '/data/diganta/Global_fit/Initial_Debugging/Orbits/esa-trailing-orbits-mojito_validation_test_2.h5',self.Tobs,dt=dt_orbit_reinterp)
-        
+
+        # NOTE: Right now the TDIs between LISAtools response and internal have a constant phase shift difference between them. 
+        self.response_type = response
+
+        if response == 'LISAtools':
+            # Initialise LISAtools with the orbit data from one of the Mojito orbits. 
+            self.response_internal = LISA_response.response.FDResponse(filename='/data/asantini/globalfit/MOJITO_DATA/mojito_light_2p5s/data/SOBHB/L1/SOBHB_731d_2.5s_L1_source0_0_20251215T183326586390Z.h5')
+            # Time of start of data collection. 
+            self.t_ref = 97729939.827664
+        elif response == 'Internal':
+            # Custom personal implementation of the LISA response 
+            self.p_splines = LISA_response.Zero_order_response_fast_locally_constant.generate_mojito_orbit_splines(
+                        '/data/diganta/Global_fit/Initial_Debugging/Orbits/esa-trailing-orbits-mojito_validation_test_2.h5',self.Tobs,dt=dt_orbit_reinterp)
+        else: 
+            raise ValueError("Response must be either 'LISAtools' or 'Internal', these are the only implementations available right now")
+
         if TDI == "AET":
             TDITag = 'AET'
         elif TDI == 'XYZ':
@@ -456,7 +469,26 @@ class F2wrapper_custom_jax:
         # print(f"[BENCH F2_custom_jax] Index masking: {(t_masking - t_waveform)*1e3:.3f} ms")
         # print(f"[BENCH F2_custom_jax] Valid frequency range: start_idx={start_idx}, end_idx={end_idx}")
     
-        T = LISA_response.Zero_order_response_fast_locally_constant.Zero_order_response_15_splined(
+        # T = LISA_response.Zero_order_response_fast_locally_constant.Zero_order_response_15_splined(
+        #                                               self.freqs,
+        #                                               times,
+        #                                               beta,
+        #                                               lam,
+        #                                               psi,
+        #                                               inc,
+        #                                               self.p_splines,)
+
+        if self.response_type == 'LISAtools':
+            T = self.response_internal.compute_response(times=times+self.t_ref,
+                                                        freqs=self.freqs,
+                                                        longitude=lam,
+                                                        latitude=beta,
+                                                        polarization=psi,
+                                                        inclination=inc)
+            
+        else: 
+            # Note here the orbits are defined from t_ref so no need to add it. 
+            T = LISA_response.Zero_order_response_fast_locally_constant.Zero_order_response_15_splined(
                                                       self.freqs,
                                                       times,
                                                       beta,
@@ -464,7 +496,8 @@ class F2wrapper_custom_jax:
                                                       psi,
                                                       inc,
                                                       self.p_splines,)
-        
+
+
         # t_response = time.perf_counter()
         # print(f"[BENCH F2_custom_jax] LISA response calculation: {(t_response - t_masking)*1e3:.3f} ms")
 
@@ -539,6 +572,8 @@ class SOBBHTDIWaveform(AETTDIWaveform):
                                     TDI = sobbh_waveform_kwargs.get('TDI','AET'),
                                     force_backend = sobbh_waveform_kwargs.get('force_backend','cuda12x'),
                                     TDIversion = response_kwargs.get('TDIversion',2),
+                                    dt_orbit_reinterp = sobbh_waveform_kwargs.get('dt_orbit_reinterp',600.0),
+                                    response = sobbh_waveform_kwargs.get('response','LISAtools'),
                                     ) 
             
         elif sobbh_waveform_args[0] == 'F2':

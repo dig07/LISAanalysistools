@@ -37,7 +37,7 @@ NUM_SPLINE_THREADS = 256
 #         query_t: shape (N,)
 #         sc_idx: shape (N,) or (1,) - 0-based index (0, 1, 2)
 #         t_grid: shape (T_dense,)
-#         pos_grid: shape (T_dense, 3_sc, 3_coords)
+#         pos_grid: shape (T_dense, XYZSensitivityBackend3_sc, 3_coords)
 #     """
 
 #     def _single_point(t, sc):

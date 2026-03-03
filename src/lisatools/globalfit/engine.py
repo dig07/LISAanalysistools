@@ -28,8 +28,6 @@ from ..detector import sangria, mojito, LISAModel
 from ..sensitivity import XYZSensitivityBackend, XYZ1SensitivityMatrix, XYZ2SensitivityMatrix, AE1SensitivityMatrix, AE2SensitivityMatrix, AET2SensitivityMatrix
 from .preprocessing import BaseProcessingStep
 
-import SOBBHSettings 
-
 @dataclasses.dataclass
 class RankInfo:
     head_rank: int = -1

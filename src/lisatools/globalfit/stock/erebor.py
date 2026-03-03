@@ -14,8 +14,8 @@ except (ModuleNotFoundError, ImportError) as e:
 import logging
 
 from eryn.moves.tempering import make_ladder
-from gbgpu.utils.utility import get_fdot
-from gbgpu.utils.utility import get_N
+# from gbgpu.utils.utility import get_fdot
+# from gbgpu.utils.utility import get_N
 from lisatools.utils.utility import AET, tukey, detrend
 from ..loginfo import init_logger
 
@@ -31,175 +31,175 @@ from eryn.backends import HDFBackend as eryn_Backend
 from ..engine import Settings, Setup
 
 
-# TODO: better way than None?
-@dataclasses.dataclass
-class GBSettings(Settings):
-    A_lims: typing.List[float, float] = None
-    f0_lims: typing.List[float, float] = None
-    m_chirp_lims: typing.List[float, float] = None
-    fdot_lims: typing.List[float, float] = None
-    phi0_lims: typing.List[float, float] = None
-    iota_lims: typing.List[float, float] = None
-    psi_lims: typing.List[float, float] = None
-    lam_lims: typing.List[float, float] = None
-    beta_lims: typing.List[float, float] = None
-    start_freq: float = 0.0001  # this might get adjusted ?
-    end_freq: float = 0.025
-    oversample: int = 4
-    extra_buffer: int = 5
-    start_resample_iter: Optional[int] = -1,  # -1 so that it starts right at the start of PE
-    iter_count_per_resample: Optional[int] = 10
-    group_proposal_kwargs: Optional[dict] = None
-    start_freq_ind: Optional[int] = 0  # goes into GPU for start of data stream
+# # TODO: better way than None?
+# @dataclasses.dataclass
+# class GBSettings(Settings):
+#     A_lims: typing.List[float, float] = None
+#     f0_lims: typing.List[float, float] = None
+#     m_chirp_lims: typing.List[float, float] = None
+#     fdot_lims: typing.List[float, float] = None
+#     phi0_lims: typing.List[float, float] = None
+#     iota_lims: typing.List[float, float] = None
+#     psi_lims: typing.List[float, float] = None
+#     lam_lims: typing.List[float, float] = None
+#     beta_lims: typing.List[float, float] = None
+#     start_freq: float = 0.0001  # this might get adjusted ?
+#     end_freq: float = 0.025
+#     oversample: int = 4
+#     extra_buffer: int = 5
+#     start_resample_iter: Optional[int] = -1,  # -1 so that it starts right at the start of PE
+#     iter_count_per_resample: Optional[int] = 10
+#     group_proposal_kwargs: Optional[dict] = None
+#     start_freq_ind: Optional[int] = 0  # goes into GPU for start of data stream
 
 
-# basic transform functions for pickling
-def f_ms_to_s(x):
-    return x * 1e-3
+# # basic transform functions for pickling
+# def f_ms_to_s(x):
+#     return x * 1e-3
 
-from ..state import GBState
-from ..hdfbackend import GBHDFBackend
+# from ..state import GBState
+# from ..hdfbackend import GBHDFBackend
 
 
-class GBSetup(Setup, GBSettings):
-    def __init__(self, gb_settings: GBSettings):
+# class GBSetup(Setup, GBSettings):
+#     def __init__(self, gb_settings: GBSettings):
         
-        # had a better way to do this but it stopped allowing for pickle
-        Setup.__init__(self, gb_settings)
+#         # had a better way to do this but it stopped allowing for pickle
+#         Setup.__init__(self, gb_settings)
 
-        level = logging.DEBUG
-        name = "GBSetup"
-        self.logger = init_logger(filename="gb_setup.log", level=level, name=name)
+#         level = logging.DEBUG
+#         name = "GBSetup"
+#         self.logger = init_logger(filename="gb_setup.log", level=level, name=name)
         
-        self.init_setup()
+#         self.init_setup()
 
-    def init_sampling_info(self):
+#     def init_sampling_info(self):
 
-        if self.transform is None:
-            gb_transform_fn_in = {
-                0: np.exp,
-                1: f_ms_to_s,
-                5: np.arccos,
-                8: np.arcsin,
-            }
+#         if self.transform is None:
+#             gb_transform_fn_in = {
+#                 0: np.exp,
+#                 1: f_ms_to_s,
+#                 5: np.arccos,
+#                 8: np.arcsin,
+#             }
 
-            gb_fill_dict = {"fill_inds": np.array([3]), "ndim_full": 9, "fill_values": np.array([0.0])}
+#             gb_fill_dict = {"fill_inds": np.array([3]), "ndim_full": 9, "fill_values": np.array([0.0])}
 
-            self.transform = TransformContainer(
-                parameter_transforms=gb_transform_fn_in, fill_dict=gb_fill_dict
-            )
+#             self.transform = TransformContainer(
+#                 parameter_transforms=gb_transform_fn_in, fill_dict=gb_fill_dict
+#             )
 
-        if self.periodic is None:
-            self.periodic = {"gb": {3: 2 * np.pi, 5: np.pi, 6: 2 * np.pi}}
+#         if self.periodic is None:
+#             self.periodic = {"gb": {3: 2 * np.pi, 5: np.pi, 6: 2 * np.pi}}
 
-        self.logger.debug("Decide how to treat fdot prior")
-        if self.priors is None:
-            # TODO: change to scaled linear in amplitude!?!
-            priors_gb = {
-                0: uniform_dist(*(np.log(np.asarray(self.A_lims)))),
-                1: uniform_dist(*(np.asarray(self.f0_lims) * 1e3)), # AmplitudeFrequencySNRPrior(rho_star, frequency_prior, L, Tobs, fd=fd),  # use sangria as a default
-                2: uniform_dist(*self.fdot_lims),
-                3: uniform_dist(*self.phi0_lims),
-                4: uniform_dist(*np.cos(self.iota_lims)),
-                5: uniform_dist(*self.psi_lims),
-                6: uniform_dist(*self.lam_lims),
-                7: uniform_dist(*np.sin(self.beta_lims)),
-            }
+#         self.logger.debug("Decide how to treat fdot prior")
+#         if self.priors is None:
+#             # TODO: change to scaled linear in amplitude!?!
+#             priors_gb = {
+#                 0: uniform_dist(*(np.log(np.asarray(self.A_lims)))),
+#                 1: uniform_dist(*(np.asarray(self.f0_lims) * 1e3)), # AmplitudeFrequencySNRPrior(rho_star, frequency_prior, L, Tobs, fd=fd),  # use sangria as a default
+#                 2: uniform_dist(*self.fdot_lims),
+#                 3: uniform_dist(*self.phi0_lims),
+#                 4: uniform_dist(*np.cos(self.iota_lims)),
+#                 5: uniform_dist(*self.psi_lims),
+#                 6: uniform_dist(*self.lam_lims),
+#                 7: uniform_dist(*np.sin(self.beta_lims)),
+#             }
 
-            # TODO: orbits check against sangria/sangria_hm
+#             # TODO: orbits check against sangria/sangria_hm
 
-            # priors_gb_fin = GBPriorWrap(8, ProbDistContainer(priors_gb))
-            self.priors = {"gb": ProbDistContainer(priors_gb)}
+#             # priors_gb_fin = GBPriorWrap(8, ProbDistContainer(priors_gb))
+#             self.priors = {"gb": ProbDistContainer(priors_gb)}
 
-        if self.betas is None:
-            snrs_ladder = np.array([1., 1.5, 2.0, 3.0, 4.0, 5.0, 7.5, 10.0, 15.0, 20.0, 35.0, 50.0, 75.0, 125.0, 250.0, 5e2])
-            ntemps_pe = 24  # len(snrs_ladder)
-            # betas =  1 / snrs_ladder ** 2  # make_ladder(ndim * 10, Tmax=5e6, ntemps=ntemps_pe)
-            betas = 1 / 1.2 ** np.arange(ntemps_pe)
-            betas[-1] = 0.0001
-            self.betas = betas
+#         if self.betas is None:
+#             snrs_ladder = np.array([1., 1.5, 2.0, 3.0, 4.0, 5.0, 7.5, 10.0, 15.0, 20.0, 35.0, 50.0, 75.0, 125.0, 250.0, 5e2])
+#             ntemps_pe = 24  # len(snrs_ladder)
+#             # betas =  1 / snrs_ladder ** 2  # make_ladder(ndim * 10, Tmax=5e6, ntemps=ntemps_pe)
+#             betas = 1 / 1.2 ** np.arange(ntemps_pe)
+#             betas[-1] = 0.0001
+#             self.betas = betas
 
-        if self.other_tempering_kwargs is None:
-            self.other_tempering_kwargs = dict(
-                adaptation_time=2,
-                permute=True
-            )
+#         if self.other_tempering_kwargs is None:
+#             self.other_tempering_kwargs = dict(
+#                 adaptation_time=2,
+#                 permute=True
+#             )
 
-        if self.initialize_kwargs is None:
-            self.initialize_kwargs = {}
+#         if self.initialize_kwargs is None:
+#             self.initialize_kwargs = {}
 
-        self.waveform_kwargs = dict(
-            dt=self.dt, T=self.Tobs, use_c_implementation=True, oversample=self.oversample, start_freq_ind=self.start_freq_ind
-        )
+#         self.waveform_kwargs = dict(
+#             dt=self.dt, T=self.Tobs, use_c_implementation=True, oversample=self.oversample, start_freq_ind=self.start_freq_ind
+#         )
 
-        if self.group_proposal_kwargs is None:
-            self.group_proposal_kwargs = dict(
-                n_iter_update=1,
-                live_dangerously=True,
-                a=1.75,
-                num_repeat_proposals=200
-            )
+#         if self.group_proposal_kwargs is None:
+#             self.group_proposal_kwargs = dict(
+#                 n_iter_update=1,
+#                 live_dangerously=True,
+#                 a=1.75,
+#                 num_repeat_proposals=200
+#             )
 
-    # def __getattr__(self, attr: str) -> typing.Any:
-    #     if hasattr(self.gb_settings, attr):
-    #         return getattr(self.gb_settings, attr)
+#     # def __getattr__(self, attr: str) -> typing.Any:
+#     #     if hasattr(self.gb_settings, attr):
+#     #         return getattr(self.gb_settings, attr)
 
-    def init_setup(self):
-        self.init_band_structure()
-        self.init_sampling_info()
-        self.init_state_backend_info()
+#     def init_setup(self):
+#         self.init_band_structure()
+#         self.init_sampling_info()
+#         self.init_state_backend_info()
 
-    def init_state_backend_info(self):
-        if self.branch_state is None:
-            self.branch_state = GBState
+#     def init_state_backend_info(self):
+#         if self.branch_state is None:
+#             self.branch_state = GBState
         
-        if self.branch_backend is None:
-            self.branch_backend = GBHDFBackend
+#         if self.branch_backend is None:
+#             self.branch_backend = GBHDFBackend
 
-    def init_band_structure(self):
-        # band separation setup
+#     def init_band_structure(self):
+#         # band separation setup
 
-        if self.oversample is None and Tobs < YEAR / 2.0:
-            self.oversample = 2
-        elif self.oversample is None:
-            self.oversample = 4
+#         if self.oversample is None and Tobs < YEAR / 2.0:
+#             self.oversample = 2
+#         elif self.oversample is None:
+#             self.oversample = 4
         
-        assert self.oversample >= 1
+#         assert self.oversample >= 1
 
-        # TODO: assign to binned f or leave general? probably better to be general
-        band_edges_in_reverse_order = [self.end_freq]
-        band_N_vals_reverse_order = []
-        # determines N from high_Frequency edge of sub-band
-        current_N = get_N(1e-30, self.end_freq, self.Tobs, oversample=self.oversample).item()
-        band_N_vals_reverse_order.append(current_N)
+#         # TODO: assign to binned f or leave general? probably better to be general
+#         band_edges_in_reverse_order = [self.end_freq]
+#         band_N_vals_reverse_order = []
+#         # determines N from high_Frequency edge of sub-band
+#         current_N = get_N(1e-30, self.end_freq, self.Tobs, oversample=self.oversample).item()
+#         band_N_vals_reverse_order.append(current_N)
 
-        current_freq = self.end_freq
-        last_freq = self.end_freq
-        while current_freq > self.start_freq:
-            current_freq = last_freq - (current_N * 2 + self.extra_buffer) * self.df
-            band_edges_in_reverse_order.append(current_freq)
-            current_N = get_N(1e-30, current_freq, self.Tobs, oversample=self.oversample).item()
-            band_N_vals_reverse_order.append(current_N)
-            last_freq = current_freq
-        band_edges_in_reverse_order.append(last_freq - (current_N * 2 + self.extra_buffer) * self.df)
+#         current_freq = self.end_freq
+#         last_freq = self.end_freq
+#         while current_freq > self.start_freq:
+#             current_freq = last_freq - (current_N * 2 + self.extra_buffer) * self.df
+#             band_edges_in_reverse_order.append(current_freq)
+#             current_N = get_N(1e-30, current_freq, self.Tobs, oversample=self.oversample).item()
+#             band_N_vals_reverse_order.append(current_N)
+#             last_freq = current_freq
+#         band_edges_in_reverse_order.append(last_freq - (current_N * 2 + self.extra_buffer) * self.df)
         
-        self.band_edges = np.asarray(band_edges_in_reverse_order)[::-1]
-        self.band_N_vals = np.asarray(band_N_vals_reverse_order)[::-1]
+#         self.band_edges = np.asarray(band_edges_in_reverse_order)[::-1]
+#         self.band_N_vals = np.asarray(band_N_vals_reverse_order)[::-1]
         
-        self.logger.debug("NEED TO THINK ABOUT mCHIRP prior")
-        self.f0_lims = [self.band_edges[1].min(), self.band_edges[-2].max()]
-        fdot_max_val = get_fdot(self.f0_lims[-1], Mc=self.m_chirp_lims[-1])
+#         self.logger.debug("NEED TO THINK ABOUT mCHIRP prior")
+#         self.f0_lims = [self.band_edges[1].min(), self.band_edges[-2].max()]
+#         fdot_max_val = get_fdot(self.f0_lims[-1], Mc=self.m_chirp_lims[-1])
 
-        self.fdot_lims = [-fdot_max_val, fdot_max_val]
+#         self.fdot_lims = [-fdot_max_val, fdot_max_val]
         
-        self.num_sub_bands = len(self.band_edges)
+#         self.num_sub_bands = len(self.band_edges)
 
 
 def mbh_dist_trans(x):
     return x * PC_SI * 1e9  # Gpc
 
 
-from bbhx.utils.transform import *
+# from bbhx.utils.transform import *
 from eryn.moves import Move
 
 
@@ -207,252 +207,252 @@ from ..hdfbackend import MBHHDFBackend
 from ..state import MBHState
 
 
-@dataclasses.dataclass
-class MBHSettings(Settings):
-    betas: Optional[np.ndarray] = None
-    inner_moves: Optional[typing.List[Move]] = None
-    num_prop_repeats: Optional[int] = 200
-    mbh_search_file_key: Optional[str] = "_mbh_search_tmp_file"
+# @dataclasses.dataclass
+# class MBHSettings(Settings):
+#     betas: Optional[np.ndarray] = None
+#     inner_moves: Optional[typing.List[Move]] = None
+#     num_prop_repeats: Optional[int] = 200
+#     mbh_search_file_key: Optional[str] = "_mbh_search_tmp_file"
 
-class MBHSetup(Setup):
-    def __init__(self, mbh_settings: MBHSettings):
+# class MBHSetup(Setup):
+#     def __init__(self, mbh_settings: MBHSettings):
         
-        # had a better way to do this but it stopped allowing for pickle
-        super().__init__(mbh_settings)
+#         # had a better way to do this but it stopped allowing for pickle
+#         super().__init__(mbh_settings)
 
-        level = logging.DEBUG
-        name = "MBHSetup"
-        self.logger = init_logger(filename="mbh_setup.log", level=level, name=name)
+#         level = logging.DEBUG
+#         name = "MBHSetup"
+#         self.logger = init_logger(filename="mbh_setup.log", level=level, name=name)
         
-        self.init_setup()
+#         self.init_setup()
         
-    def init_sampling_info(self):
+#     def init_sampling_info(self):
 
-        if self.transform is None:
+#         if self.transform is None:
 
-            mbh_transform_fn_in = {
-                0: np.exp,
-                4: mbh_dist_trans,
-                7: np.arccos,
-                9: np.arcsin,
-                (0, 1): mT_q,
-                (11, 8, 9, 10): LISA_to_SSB,
-            }
+#             mbh_transform_fn_in = {
+#                 0: np.exp,
+#                 4: mbh_dist_trans,
+#                 7: np.arccos,
+#                 9: np.arcsin,
+#                 (0, 1): mT_q,
+#                 (11, 8, 9, 10): LISA_to_SSB,
+#             }
 
-            # for transforms
-            mbh_fill_dict = {
-                "ndim_full": 12,
-                "fill_values": np.array([0.0]),
-                "fill_inds": np.array([6]),
-            }
+#             # for transforms
+#             mbh_fill_dict = {
+#                 "ndim_full": 12,
+#                 "fill_values": np.array([0.0]),
+#                 "fill_inds": np.array([6]),
+#             }
 
-            self.transform = TransformContainer(
-                parameter_transforms=mbh_transform_fn_in, fill_dict=mbh_fill_dict
-            )
+#             self.transform = TransformContainer(
+#                 parameter_transforms=mbh_transform_fn_in, fill_dict=mbh_fill_dict
+#             )
 
-        if self.periodic is None:
-            self.periodic = {"mbh": {5: 2 * np.pi, 7: 2 * np.pi, 9: np.pi}}
+#         if self.periodic is None:
+#             self.periodic = {"mbh": {5: 2 * np.pi, 7: 2 * np.pi, 9: np.pi}}
 
-        self.logger.debug("Decide how to treat fdot prior")
-        if self.priors is None:
-            # TODO: change to scaled linear in amplitude!?!
-            priors_mbh = {
-                0: uniform_dist(np.log(1e4), np.log(1e8)),
-                1: uniform_dist(0.01, 0.999999999),
-                2: uniform_dist(-0.99999999, +0.99999999),
-                3: uniform_dist(-0.99999999, +0.99999999),
-                4: uniform_dist(0.01, 1000.0),
-                5: uniform_dist(0.0, 2 * np.pi),
-                6: uniform_dist(-1.0 + 1e-6, 1.0 - 1e-6),
-                7: uniform_dist(0.0, 2 * np.pi),
-                8: uniform_dist(-1.0 + 1e-6, 1.0 - 1e-6),
-                9: uniform_dist(0.0, np.pi),
-                10: uniform_dist(0.0, self.Tobs + 3600.0),
-            }
+#         self.logger.debug("Decide how to treat fdot prior")
+#         if self.priors is None:
+#             # TODO: change to scaled linear in amplitude!?!
+#             priors_mbh = {
+#                 0: uniform_dist(np.log(1e4), np.log(1e8)),
+#                 1: uniform_dist(0.01, 0.999999999),
+#                 2: uniform_dist(-0.99999999, +0.99999999),
+#                 3: uniform_dist(-0.99999999, +0.99999999),
+#                 4: uniform_dist(0.01, 1000.0),
+#                 5: uniform_dist(0.0, 2 * np.pi),
+#                 6: uniform_dist(-1.0 + 1e-6, 1.0 - 1e-6),
+#                 7: uniform_dist(0.0, 2 * np.pi),
+#                 8: uniform_dist(-1.0 + 1e-6, 1.0 - 1e-6),
+#                 9: uniform_dist(0.0, np.pi),
+#                 10: uniform_dist(0.0, self.Tobs + 3600.0),
+#             }
 
-            # TODO: orbits check against sangria/sangria_hm
+#             # TODO: orbits check against sangria/sangria_hm
 
-            self.priors = {"mbh": ProbDistContainer(priors_mbh)}
+#             self.priors = {"mbh": ProbDistContainer(priors_mbh)}
 
-        if self.betas is None:
-            snrs_ladder = np.array([1., 1.5, 2.0, 3.0, 4.0, 5.0, 7.5, 10.0, 15.0, 20.0, 35.0, 50.0, 75.0, 125.0, 250.0, 5e2])
-            ntemps_pe = 24  # len(snrs_ladder)
-            # betas =  1 / snrs_ladder ** 2  # make_ladder(ndim * 10, Tmax=5e6, ntemps=ntemps_pe)
-            betas = 1 / 1.2 ** np.arange(ntemps_pe)
-            betas[-1] = 0.0001
-            self.betas = betas
+#         if self.betas is None:
+#             snrs_ladder = np.array([1., 1.5, 2.0, 3.0, 4.0, 5.0, 7.5, 10.0, 15.0, 20.0, 35.0, 50.0, 75.0, 125.0, 250.0, 5e2])
+#             ntemps_pe = 24  # len(snrs_ladder)
+#             # betas =  1 / snrs_ladder ** 2  # make_ladder(ndim * 10, Tmax=5e6, ntemps=ntemps_pe)
+#             betas = 1 / 1.2 ** np.arange(ntemps_pe)
+#             betas[-1] = 0.0001
+#             self.betas = betas
 
-        # TODO: maybe combine this into Setup
-        if self.other_tempering_kwargs is None:
-            self.other_tempering_kwargs = dict(permute=False)
+#         # TODO: maybe combine this into Setup
+#         if self.other_tempering_kwargs is None:
+#             self.other_tempering_kwargs = dict(permute=False)
 
-        if "permute" not in self.other_tempering_kwargs:
-            self.other_tempering_kwargs["permute"] = False
+#         if "permute" not in self.other_tempering_kwargs:
+#             self.other_tempering_kwargs["permute"] = False
 
-        assert not self.other_tempering_kwargs["permute"]
+#         assert not self.other_tempering_kwargs["permute"]
 
-        if self.initialize_kwargs is None:
-            self.initialize_kwargs = {}
+#         if self.initialize_kwargs is None:
+#             self.initialize_kwargs = {}
 
-        self.waveform_kwargs = dict(
-            modes=[(2,2)],
-            length=1024,
-        )
+#         self.waveform_kwargs = dict(
+#             modes=[(2,2)],
+#             length=1024,
+#         )
 
-        if self.inner_moves is None:
-            from lisatools.sampling.moves.skymodehop import SkyMove
-            from eryn.moves import StretchMove
-            self.inner_moves = [
-                (SkyMove(which="both"), 0.02),
-                (SkyMove(which="long"), 0.05),
-                (SkyMove(which="lat"), 0.05),
-                (StretchMove(), 0.88)
-            ]
+#         if self.inner_moves is None:
+#             from lisatools.sampling.moves.skymodehop import SkyMove
+#             from eryn.moves import StretchMove
+#             self.inner_moves = [
+#                 (SkyMove(which="both"), 0.02),
+#                 (SkyMove(which="long"), 0.05),
+#                 (SkyMove(which="lat"), 0.05),
+#                 (StretchMove(), 0.88)
+#             ]
 
-    def init_setup(self):
-        self.init_sampling_info()
-        self.init_state_backend_info()
+#     def init_setup(self):
+#         self.init_sampling_info()
+#         self.init_state_backend_info()
 
-    def init_state_backend_info(self):
-        if self.branch_state is None:
-            self.branch_state = MBHState
+#     def init_state_backend_info(self):
+#         if self.branch_state is None:
+#             self.branch_state = MBHState
         
-        if self.branch_backend is None:
-            self.branch_backend = MBHHDFBackend
+#         if self.branch_backend is None:
+#             self.branch_backend = MBHHDFBackend
 
-from ..hdfbackend import EMRIHDFBackend
-from ..state import EMRIState
-@dataclasses.dataclass
-class EMRISettings(Settings):
-    logm1_lims: typing.List[float, float] = None
-    m2_lims: typing.List[float, float] = None
-    a_lims: typing.List[float, float] = None
-    p0_lims: typing.List[float, float] = None
-    e0_lims: typing.List[float, float] = None
-    waveform_kwargs: Optional[dict] = None
-    injection: Optional[np.ndarray] = None # AS here only for the starting state 
-    info_matrix_gen: Optional[Any] = None #todo change name to info matrix or smth
-    fill_values: np.ndarray = dataclasses.field(default_factory=lambda: np.array([1.0, 0.0])) 
-    betas: Optional[np.ndarray] = None
-    inner_moves: Optional[typing.List[Move]] = None
-    num_prop_repeats: Optional[int] = 10
-    emri_search_file_key: Optional[str] = "_emri_search_tmp_file"
+# from ..hdfbackend import EMRIHDFBackend
+# from ..state import EMRIState
+# @dataclasses.dataclass
+# class EMRISettings(Settings):
+#     logm1_lims: typing.List[float, float] = None
+#     m2_lims: typing.List[float, float] = None
+#     a_lims: typing.List[float, float] = None
+#     p0_lims: typing.List[float, float] = None
+#     e0_lims: typing.List[float, float] = None
+#     waveform_kwargs: Optional[dict] = None
+#     injection: Optional[np.ndarray] = None # AS here only for the starting state 
+#     info_matrix_gen: Optional[Any] = None #todo change name to info matrix or smth
+#     fill_values: np.ndarray = dataclasses.field(default_factory=lambda: np.array([1.0, 0.0])) 
+#     betas: Optional[np.ndarray] = None
+#     inner_moves: Optional[typing.List[Move]] = None
+#     num_prop_repeats: Optional[int] = 10
+#     emri_search_file_key: Optional[str] = "_emri_search_tmp_file"
 
-class EMRISetup(Setup):
-    def __init__(self, emri_settings: EMRISettings):
+# class EMRISetup(Setup):
+#     def __init__(self, emri_settings: EMRISettings):
         
-        # had a better way to do this but it stopped allowing for pickle
-        super().__init__(emri_settings)
+#         # had a better way to do this but it stopped allowing for pickle
+#         super().__init__(emri_settings)
 
-        level = logging.DEBUG
-        name = "EMRISetup"
-        self.logger = init_logger(filename="emri_setup.log", level=level, name=name)
+#         level = logging.DEBUG
+#         name = "EMRISetup"
+#         self.logger = init_logger(filename="emri_setup.log", level=level, name=name)
         
-        self.init_setup()
+#         self.init_setup()
         
-    def init_sampling_info(self):
+#     def init_sampling_info(self):
 
-        if self.transform is None:
+#         if self.transform is None:
 
-            # for transforms
+#             # for transforms
 
-            emri_fill_dict = {
-            "ndim_full": 14,
-            "fill_values": self.fill_values, # inclination and Phi_theta
-            "fill_inds": np.array([5, 12]),
-            }
+#             emri_fill_dict = {
+#             "ndim_full": 14,
+#             "fill_values": self.fill_values, # inclination and Phi_theta
+#             "fill_inds": np.array([5, 12]),
+#             }
 
-            emri_transform_fn_in = {
-                0: np.exp,  # M 
-                7: np.arccos, # qS
-                9: np.arccos,  # qK
-            }
+#             emri_transform_fn_in = {
+#                 0: np.exp,  # M 
+#                 7: np.arccos, # qS
+#                 9: np.arccos,  # qK
+#             }
 
-            self.transform = TransformContainer(
-                parameter_transforms=emri_transform_fn_in, fill_dict=emri_fill_dict
-            )
+#             self.transform = TransformContainer(
+#                 parameter_transforms=emri_transform_fn_in, fill_dict=emri_fill_dict
+#             )
 
-        if self.periodic is None:
-            self.periodic = {"emri": {7: 2 * np.pi, 9: 2 * np.pi, 10: 2 * np.pi, 11: 2 * np.pi}}
+#         if self.periodic is None:
+#             self.periodic = {"emri": {7: 2 * np.pi, 9: 2 * np.pi, 10: 2 * np.pi, 11: 2 * np.pi}}
 
 
-        self.setup_priors()
+#         self.setup_priors()
         
-        if self.betas is None:
-            snrs_ladder = np.array([1., 1.5, 2.0, 3.0, 4.0, 5.0, 7.5, 10.0, 15.0, 20.0, 35.0, 50.0, 75.0, 125.0, 250.0, 5e2])
-            ntemps_pe = 24  # len(snrs_ladder)
-            # betas =  1 / snrs_ladder ** 2  # make_ladder(ndim * 10, Tmax=5e6, ntemps=ntemps_pe)
-            betas = 1 / 1.2 ** np.arange(ntemps_pe)
-            #betas[-1] = 0.0001
-            self.betas = betas
+#         if self.betas is None:
+#             snrs_ladder = np.array([1., 1.5, 2.0, 3.0, 4.0, 5.0, 7.5, 10.0, 15.0, 20.0, 35.0, 50.0, 75.0, 125.0, 250.0, 5e2])
+#             ntemps_pe = 24  # len(snrs_ladder)
+#             # betas =  1 / snrs_ladder ** 2  # make_ladder(ndim * 10, Tmax=5e6, ntemps=ntemps_pe)
+#             betas = 1 / 1.2 ** np.arange(ntemps_pe)
+#             #betas[-1] = 0.0001
+#             self.betas = betas
 
-        self.logger.info(f"Using betas: {self.betas} in EMRI branch")
+#         self.logger.info(f"Using betas: {self.betas} in EMRI branch")
 
-        # TODO: maybe combine this into Setup
-        if self.other_tempering_kwargs is None:
-            self.other_tempering_kwargs = dict(permute=False)
+#         # TODO: maybe combine this into Setup
+#         if self.other_tempering_kwargs is None:
+#             self.other_tempering_kwargs = dict(permute=False)
 
-        if "permute" not in self.other_tempering_kwargs:
-            self.other_tempering_kwargs["permute"] = False
+#         if "permute" not in self.other_tempering_kwargs:
+#             self.other_tempering_kwargs["permute"] = False
 
-        assert not self.other_tempering_kwargs["permute"]
+#         assert not self.other_tempering_kwargs["permute"]
 
-        if self.initialize_kwargs is None:
-            self.initialize_kwargs = {}
+#         if self.initialize_kwargs is None:
+#             self.initialize_kwargs = {}
 
-        if self.inner_moves is None:
-            from eryn.moves import StretchMove
-            self.inner_moves = [
-                (StretchMove(), 1.0)
-            ]
+#         if self.inner_moves is None:
+#             from eryn.moves import StretchMove
+#             self.inner_moves = [
+#                 (StretchMove(), 1.0)
+#             ]
 
-    def setup_priors(self,):
-        """
-        Get the prior distributions for the EMRI parameters.
-        override the default priors with custom boundaries for the intrinsic parameters. 
+#     def setup_priors(self,):
+#         """
+#         Get the prior distributions for the EMRI parameters.
+#         override the default priors with custom boundaries for the intrinsic parameters. 
 
-        Args:
+#         Args:
 
-        Returns:
-            ProbDistContainer: Container with prior distributions for each parameter.
-        """
+#         Returns:
+#             ProbDistContainer: Container with prior distributions for each parameter.
+#         """
 
-        priors_emri = {
-            0: uniform_dist(np.log(5e5), np.log(5e6)), #log m1
-            1: uniform_dist(1, 100), # m2
-            2: uniform_dist(0.01, 0.999),  # a
-            3: uniform_dist(5.0, 100.0), # p0
-            4: uniform_dist(0.001, 0.8), # e0
-            5: uniform_dist(0.01, 100.0),  # dist in Gpc
-            6: uniform_dist(-0.99999, 0.99999),  # qS
-            7: uniform_dist(0.0, 2 * np.pi),  # phiS
-            8: uniform_dist(-0.99999, 0.99999),  # qK
-            9: uniform_dist(0.0, 2 * np.pi),  # phiK
-            10: uniform_dist(0.0, 2 * np.pi),  # Phi_phi0
-            11: uniform_dist(0.0, 2 * np.pi),  # Phi_r0
-        }
+#         priors_emri = {
+#             0: uniform_dist(np.log(5e5), np.log(5e6)), #log m1
+#             1: uniform_dist(1, 100), # m2
+#             2: uniform_dist(0.01, 0.999),  # a
+#             3: uniform_dist(5.0, 100.0), # p0
+#             4: uniform_dist(0.001, 0.8), # e0
+#             5: uniform_dist(0.01, 100.0),  # dist in Gpc
+#             6: uniform_dist(-0.99999, 0.99999),  # qS
+#             7: uniform_dist(0.0, 2 * np.pi),  # phiS
+#             8: uniform_dist(-0.99999, 0.99999),  # qK
+#             9: uniform_dist(0.0, 2 * np.pi),  # phiK
+#             10: uniform_dist(0.0, 2 * np.pi),  # Phi_phi0
+#             11: uniform_dist(0.0, 2 * np.pi),  # Phi_r0
+#         }
 
-        limits = ['logm1_lims', 'm2_lims', 'a_lims', 'p0_lims', 'e0_lims']
-        for i, lims in enumerate(limits):
-            if getattr(self, lims) is not None:
-                self.logger.info(f'Setting prior for parameter {i} using limits {getattr(self, lims)}')
-                priors_emri[i] = uniform_dist(*getattr(self, lims))
+#         limits = ['logm1_lims', 'm2_lims', 'a_lims', 'p0_lims', 'e0_lims']
+#         for i, lims in enumerate(limits):
+#             if getattr(self, lims) is not None:
+#                 self.logger.info(f'Setting prior for parameter {i} using limits {getattr(self, lims)}')
+#                 priors_emri[i] = uniform_dist(*getattr(self, lims))
 
-        self.priors = {"emri": ProbDistContainer(priors_emri)}
+#         self.priors = {"emri": ProbDistContainer(priors_emri)}
 
-    def init_setup(self):
-        self.init_sampling_info()
-        self.init_state_backend_info()
+#     def init_setup(self):
+#         self.init_sampling_info()
+#         self.init_state_backend_info()
 
-    def init_state_backend_info(self):
-        if self.branch_state is None:
-            self.branch_state = EMRIState
+#     def init_state_backend_info(self):
+#         if self.branch_state is None:
+#             self.branch_state = EMRIState
         
-        if self.branch_backend is None:
-            self.branch_backend = EMRIHDFBackend
+#         if self.branch_backend is None:
+#             self.branch_backend = EMRIHDFBackend
 
 
-from lisatools.detector import EqualArmlengthOrbits
+# from lisatools.detector import EqualArmlengthOrbits
 
 
 @dataclasses.dataclass
@@ -597,13 +597,16 @@ class SOBBHSettings(Settings):
     psi_lims: typing.List[float, float] = None
     lam_lims: typing.List[float, float] = None
     beta_lims: typing.List[float, float] = None
-    waveform_type: str = 'F2'  # or 'T2'
+    waveform_type: str = 'F2_custom'  # 'F2_custom', 'F2', or 'T2'
     frequency_bounds: tuple = (1e-3, 1e-1)
-    nleaves_max: int = 6 # Not sure if/how I should use this (hard fixed to 6 for now as thats how many sources there are and we are not going to do RJMCMC)
-    nleaves_min: int = 6 # Not sure if/how I should use this (hard fixed to 6 for now as thats how many sources there are and we are not going to do RJMCMC)
-    ndim: int = 11  # number of parameters
+    nleaves_max: int = 6 # Fixed number of sources (no RJMCMC)
+    nleaves_min: int = 6 # Fixed number of sources (no RJMCMC)
+    ndim: int = 11  # number of parameters: m1, m2, e0, D, inc, f0, s1, s2, psi, lam, beta
+    waveform_kwargs: Optional[dict] = None  # kwargs passed to wave_gen during MCMC (empty for F2_custom)
+    injection: Optional[np.ndarray] = None  # injection parameters for initialising PE, shape (nsources, ndim)
     inner_moves: Optional[typing.List[Move]] = None
     num_prop_repeats: Optional[int] = 200
+    transform: Optional[TransformContainer] = None # 
 
 class SOBBHSetup(Setup):
     def __init__(self, sobbh_settings: SOBBHSettings):
@@ -619,7 +622,10 @@ class SOBBHSetup(Setup):
         
     def init_sampling_info(self):
 
-
+        # F2_custom.__call__ takes only the 11 physical params as positional args,
+        # no extra kwargs needed during MCMC waveform generation.
+        if self.waveform_kwargs is None:
+            self.waveform_kwargs = {}
 
         if self.transform is None:
 
@@ -637,13 +643,26 @@ class SOBBHSetup(Setup):
             #     9: np.arccos,  # qK
             # }
 
-            # TODO: Worry about these later 
-            sobbh_fill_dict = {}
-            # TODO: will need to transform from m1,m2 to chirp mass and mass ratio for the sampling, but I need to figure out how to do this with the priors and limits.
-            sobbh_transform_fn_in = {}
+            # # TODO: Worry about these later 
+            # sobbh_fill_dict = {}
+            # # TODO: will need to transform from m1,m2 to chirp mass and mass ratio for the sampling, but I need to figure out how to do this with the priors and limits.
+            # sobbh_transform_fn_in = {}
 
+            # self.transform = TransformContainer(
+            #     parameter_transforms=sobbh_transform_fn_in, fill_dict=sobbh_fill_dict
+            # )
+
+            # Temp 
+            # Identity transform (no transformations, no fill values)
+            # For SOBBH: 11 parameters with no transformations
+            input_basis = list(range(self.ndim))
+            output_basis = list(range(self.ndim))
+            
             self.transform = TransformContainer(
-                parameter_transforms=sobbh_transform_fn_in, fill_dict=sobbh_fill_dict
+                input_basis=input_basis,
+                output_basis=output_basis,
+                parameter_transforms=None,
+                fill_dict=None
             )
 
         if self.periodic is None:

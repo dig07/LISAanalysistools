@@ -25,7 +25,7 @@ from ..utils.multigpudataholder import MultiGPUDataHolder
 import cupy as cp
 from ..sampling.prior import GBPriorWrap
 from .psdglobal import log_like as psd_log_like
-from .psdglobal import PSDwithGBPriorWrap
+# from .psdglobal import PSDwithGBPriorWrap
 #from .moves import MBHSpecialMove
 
 from eryn.state import State as eryn_State
@@ -38,18 +38,18 @@ from .utils import SetupInfoTransfer, AllSetupInfoTransfer
 from ..sensitivity import get_sensitivity
 from .hdfbackend import GFHDFBackend
 from .state import GFState
-from bbhx.waveformbuild import BBHWaveformFD
+# from bbhx.waveformbuild import BBHWaveformFD
 
-from .mbhsearch import ParallelMBHSearchControl
+# from .mbhsearch import ParallelMBHSearchControl
 from .galaxyglobal import run_gb_pe, run_gb_bulk_search, fit_each_leaf
 from .psdglobal import run_psd_pe
-from .mbhglobal import run_mbh_pe
+# from .mbhglobal import run_mbh_pe
 
 from ..sampling.stopping import SearchConvergeStopping, MPICommunicateStopping
 from .plot import RunResultsProduction
 from .hdfbackend import save_to_backend_asynchronously_and_plot
 
-from gbgpu.gbgpu import GBGPU
+# from gbgpu.gbgpu import GBGPU
 
 from eryn.backends import HDFBackend
 
@@ -67,7 +67,6 @@ import typing
 import dataclasses
 
 from .diagnosticplot import DiagnosticPlotter
-
 
 class CurrentInfoGlobalFit:
     def __init__(self, settings: GlobalFitSettings):

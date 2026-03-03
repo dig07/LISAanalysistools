@@ -17,7 +17,7 @@ from eryn.moves.tempering import make_ladder
 from eryn.state import State, BranchSupplemental
 from lisatools.sampling.prior import GBPriorWrap
 from eryn.prior import ProbDistContainer
-from gbgpu.gbgpu import GBGPU
+# from gbgpu.gbgpu import GBGPU
 
 import subprocess
 

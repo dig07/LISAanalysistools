@@ -1117,7 +1117,7 @@ class JAXL1Orbits(L1Orbits):
         if squeeze_t:
             output = output.squeeze(axis=0)
         
-        return output.block_until_ready()
+        return output
 
     
     def get_light_travel_times(self, t, link):
@@ -1147,7 +1147,7 @@ class JAXL1Orbits(L1Orbits):
         if squeeze_t:
             output = output.squeeze(axis=0)
         
-        return output.block_until_ready()
+        return output
 
     def get_normal_unit_vec(self, t, link):
         """Compute normal unit vectors using JAX interpolation.
@@ -1176,7 +1176,7 @@ class JAXL1Orbits(L1Orbits):
         if squeeze_t:
             output = output.squeeze(axis=0)
         
-        return output.block_until_ready()
+        return output
 
     def tree_flatten(self):
         # Collect children (JAX arrays)

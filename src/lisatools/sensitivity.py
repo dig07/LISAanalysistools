@@ -1655,6 +1655,8 @@ class XYZSensitivityBackend(LISAToolsParallelModule, SensitivityMatrixBase):
 
         self.mask_percentage = mask_percentage if mask_percentage is not None else 0.05
 
+        self.force_backend = force_backend
+
         self._setup()
 
     @property
@@ -2134,7 +2136,7 @@ class XYZSensitivityBackend(LISAToolsParallelModule, SensitivityMatrixBase):
         filter_func = np_gaussian_filter1d if self.xp == np else cp_gaussian_filter1d
         
         smoothed_matrix = matrix_in.copy()
-        mask = self.dips_mask.reshape(self.num_times, self.num_freqs)
+        mask = self.dips_mask.reshape(self.num_times, self.num_freqs).squeeze()
         _smoothed = filter_func(matrix_in, sigma=sigma, axis=-1)
 
         smoothed_matrix[..., mask] = _smoothed[..., mask]

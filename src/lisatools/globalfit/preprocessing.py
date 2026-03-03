@@ -631,7 +631,7 @@ class BaseProcessingStep(SignalProcessor):
         
         elif trim_kwargs is None and filtered:
             logger.warning("Data was filtered but no trim_kwargs provided. Applying default trimming of 100 hours from each end to avoid edge effects.")
-            trim_duration = 100 * 3600  # 100 hours in seconds
+            trim_duration = 0 # 100 * 3600  # 100 hours in seconds
             _, _ = self.trim(duration=trim_duration, is_percent=False, trimming_type='from_each_end', **kwargs)
 
         if Tobs is not None:

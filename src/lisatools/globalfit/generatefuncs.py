@@ -4,10 +4,10 @@ import warnings
 
 from ..sensitivity import get_sensitivity
 from ..detector import sangria
-from bbhx.waveformbuild import BBHWaveformFD
+# from bbhx.waveformbuild import BBHWaveformFD
 from ..sources.emri.waveform import EMRITDIWaveform
 
-from gbgpu.gbgpu import GBGPU
+# from gbgpu.gbgpu import GBGPU
 
 from eryn.backends import HDFBackend
 

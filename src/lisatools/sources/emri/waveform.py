@@ -12,7 +12,7 @@ from copy import deepcopy
 
 # _ = few.get_backend('cuda12x')
 
-from few.waveform import GenerateEMRIWaveform
+# from few.waveform import GenerateEMRIWaveform
 
 # imports
 from ..waveformbase import AETTDIWaveform
