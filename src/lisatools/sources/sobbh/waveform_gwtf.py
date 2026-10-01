@@ -65,6 +65,8 @@ class GWTF_generator:
         else:
             backend = 'cpu'
             self.xp = np
+        self.config = config
+        self.backend = backend
 
         # Read in the quantities defined per walker, GWTF expected shape is (#nWalkers, #nT, #nF, #nChannels)
         self.data = self.xp.asarray(datas)
@@ -79,9 +81,10 @@ class GWTF_generator:
                                                                 psds=self.psd,
                                                                 spacecraft_orbits=self.spacecraft_positions,
                                                                 spacecraft_ltts=self.spacecraft_LTTs,
-                                                                block_vectorised_gpu = True, # Block vectorised mode, better for small batches -> global fit 
+                                                                block_vectorised_gpu = False, # Block vectorised mode, better for small batches -> global fit 
                                                                 gf_mode = True, # Use the GF mode, allowing for one PSD and DATA array per walker.
                                                                 )
+
 
         # Data is held constant during the PE process. 
         
@@ -89,10 +92,55 @@ class GWTF_generator:
         # data , PSD: (#nWalkers, #nT, #nF, #nChannels)
         self.d_d = 4*self.xp.abs(self.xp.sum(self.data.conjugate() * self.data / self.psd * self.dF,axis=(1,2,3))).real
         
-        # # TODO: Code in the waveform 
-        # # Only used for the residuals at the last step. 
-        # self.waveform_gen_object = 1
+        # Waveform-only generator (non-gf_mode), built lazily in compute_time_frequency_waveform.
+        # Only used for the residuals at the last step.
+        self.waveform_gen_object = None
 
+    def compute_time_frequency_waveform(self, params):
+        """
+        Compute the time-frequency waveform for each source. 
+
+        params: (#nSources, 11) array of parameters, where the columns are:
+        0: Mc, 1: eta, 2: cosinc, 3: D (Mpc), 4: f0, 5: s1, 6: s2, 7: phi_coal, 8: psi, 9: sky_lon (RA), 10: sky_lat (DEC)
+
+        Returns waveform_array of shape (#nSources, #nT, #nF, #nChannels)
+        """
+        params = self.xp.asarray(params)
+
+        Mc = params[:,0]
+        eta = params[:,1]
+        cosinc = params[:,2]
+        D = params[:,3]*1.e+6 # Convert distance from Mpc to pc
+        f0 = params[:,4]
+        s1 = params[:,5]
+        s2 = params[:,6]
+        phi_coal = params[:,7]
+        psi = params[:,8]
+        sky_lon = params[:,9] # RA. in radians
+        sky_lat = params[:,10] # DEC. in radians
+
+        M = Mc * (eta)**(-3/5)
+
+        wf_params = self.xp.column_stack((M, eta, cosinc, D, f0, s1, s2, phi_coal))
+        resp_params = self.xp.column_stack((cosinc, psi, sky_lon, sky_lat))
+
+        # gf_mode only supports the inner-product kernels, so waveforms come from a separate
+        # non-gf_mode generator on the same grid/orbits. Built on first use, no data/PSD needed.
+        if self.waveform_gen_object is None:
+            self.waveform_gen_object = AnalyticTimeFrequencyWaveform(model_class=TaylorT3Spin,
+                                                                    config=self.config,
+                                                                    tdi_type=2,
+                                                                    backend=self.backend,
+                                                                    spacecraft_orbits=self.spacecraft_positions,
+                                                                    spacecraft_ltts=self.spacecraft_LTTs,
+                                                                    )
+
+        waveform_array = self.waveform_gen_object(parameters=wf_params,
+                                                  parameters_response=resp_params,
+                                                  out=None,
+                                                  compute_statistic=False)
+
+        return waveform_array
 
     def compute_inner_products_per_segment(self, params, data_indices):
         """
