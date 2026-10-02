@@ -2,63 +2,73 @@
 
 Waveform/likelihood/inner-product generator using the gwtf package (https://github.com/cchapmanbird/gwtf).
 
-The waveform used here is TaylorT3, same as what is used in waveform.py. 
-The fresnel approximation is applied in a box-car window scenario to model the time-frequency waveform. 
-Using a leading order time-frequency local response function. 
+The waveform used here is TaylorT3, same as what is used in waveform.py.
+The fresnel approximation is applied in a box-car window scenario to model the time-frequency waveform.
+Using a leading order time-frequency local response function.
 
 """
-import cupy as cp 
-import numpy as np 
-import pygwtf
+import cupy as cp
+import numpy as np
 from pygwtf.models import TaylorT3Spin
 from pygwtf.generator import AnalyticTimeFrequencyWaveform
-import lisaconstants as lc
 
-class GWTF_generator: 
+from ...utils.constants import C_SI
+from ...detector import Orbits
+from ...domains import STFTSettings
 
-    def __init__(self, 
-                 datas, 
-                 psds, 
-                 time_grid, 
-                 frequency_grid, 
-                 spacecraft_positions, 
-                 spacecraft_LTTs, 
+class GWTF_generator:
+
+    def __init__(self,
+                 settings: STFTSettings,
+                 orbits: Orbits,
                  T_obs,
                  fresnel_kernel_width = 10,
-                 use_GPU = True, 
+                 use_GPU = True,
                  ):
         """
-        Assumptions: 
-        - PSD and data are already pre-processed and in the correct shape corresponding to the tf grid provided. 
-        - PSD is clipped around the zeros as expected. 
+        Assumptions:
+        - PSD and data are already pre-processed and in the correct shape corresponding to the tf grid provided.
+          Use to_gwtf_layout to map lisatools STFT arrays onto the gwtf grid.
+        - PSD is clipped around the zeros as expected.
+
+        Frequency grid: gwtf bin k is centred on (k+1)*dF, i.e. the grid always starts at dF (no DC bin).
+        The gwtf grid therefore covers lisatools STFT bins 1..settings.ind_max, and bins below settings.ind_min
+        (outside the active band) are zero-filled in the data and given infinite PSD by to_gwtf_layout.
         """
 
-        # Time and frequency grid
-        self.t_grid = time_grid # time-grid boundaries (nT+1)
-        self.f_grid = frequency_grid # Cental frequency grid (nF)
-        self.dF = self.f_grid[1] - self.f_grid[0] # Frequency bin width
-        self.dT = self.t_grid[1] - self.t_grid[0] # Time bin width
+        self.settings = settings
 
-        self.nT = len(self.t_grid) - 1
-        self.nF = len(self.f_grid)
+        self.dF = settings.df # Frequency bin width
+        self.dT = settings.dt # Time bin width
+
+        self.nT = settings.NT # Number of time segments
+        # nF here is not the same as settings.NF_active, as the gwtf grid always starts at dF (no DC bin) and goes up to settings.ind_max.
+        # LISAtools uses a more general (and better) setup where the STFT grid starts at settings.ind_min and goes up to settings.ind_max, and the active band is settings.ind_min..settings.ind_max.
+        self.nF = settings.ind_max # Number of gwtf frequency bins, STFT bins 1..ind_max
+
+        # gwtf t=0 is the start of the first segment, i.e. settings.t0 (= t_init + 850.5 + pad_trim)
+        self.t_grid = settings.t0 + np.arange(self.nT + 1) * self.dT # (nT+1,) segment edges for GWTF
+        self.f_grid = (np.arange(self.nF) + 1) * self.dF # (nF,) central frequency grid for GWTF
 
         self.T_obs = T_obs # Observation time in seconds.
 
+        # midpoints of the time segments, used for the spacecraft positions and LTTs.
+        t_midpoints = orbits.xp.asarray(self.t_grid[:-1] + self.dT/2) # (nT,) on the orbits backend
+
+        # Compute orbital quantities for response from the orbits object.
         # NOTE: Spacecraft positions are computed in equitorial frame, so the response function needs (ra,dec) instead of (lon,lat) for the sky location.
+        spacecraft_positions = orbits.xp.stack([orbits.get_pos(t_midpoints, sc) for sc in (1, 2, 3)], axis=1) # (nT, 3 (spacecrafts), 3 (x,y,z)) for GWTF
 
-        # Spacecraft positions and light-travel times
-        self.spacecraft_positions = spacecraft_positions #(nT, 3 (spacecrafts),3 (x,y,z)) for GWTF
-
-        # TODO: Allow for the LTTs to not be symmetric, i.e. 12 =/= 21, should be simple inside GWTF response
-        self.spacecraft_LTTs = spacecraft_LTTs #  (12, 23, 31) order #(nT, 3 (12,23,31)) for GWTF
+        # 12, 23, 31 only needed for gwtf for now
+        spacecraft_LTTs = orbits.xp.stack([orbits.get_light_travel_times(t_midpoints, link) for link in (12, 23, 31)], axis=1) * C_SI # (nT, 3), seconds -> metres, as gwtf expects
 
         # Setup config that waveform generator needs
         config = {'nT':self.nT,
                   'nF':self.nF,
                   'dT':self.dT,
                   'dF':self.dF,
-                  'kernel_width':fresnel_kernel_width}    
-       
+                  'kernel_width':fresnel_kernel_width}
+
         if use_GPU:
             backend = 'gpu'
             self.xp = cp
@@ -68,42 +78,74 @@ class GWTF_generator:
         self.config = config
         self.backend = backend
 
-        # Read in the quantities defined per walker, GWTF expected shape is (#nWalkers, #nT, #nF, #nChannels)
-        self.data = self.xp.asarray(datas)
-        self.psd = self.xp.asarray(psds)
+        self.spacecraft_positions = self.xp.asarray(spacecraft_positions)
+        self.spacecraft_LTTs = self.xp.asarray(spacecraft_LTTs)
 
-        # Waveform generator object which computes raw <h|h> and <d|d> statistics per waveform generator. 
-        self.inner_product_statistics_object = AnalyticTimeFrequencyWaveform(model_class=TaylorT3Spin, 
+        # Waveform generator object which computes raw <h|h> and <d|d> statistics per waveform generator.
+        self.inner_product_statistics_object = AnalyticTimeFrequencyWaveform(model_class=TaylorT3Spin,
                                                                 config=config,
                                                                 tdi_type=2,
                                                                 backend=backend,
-                                                                channels=self.data,
-                                                                psds=self.psd,
                                                                 spacecraft_orbits=self.spacecraft_positions,
                                                                 spacecraft_ltts=self.spacecraft_LTTs,
-                                                                block_vectorised_gpu = False, # Block vectorised mode, better for small batches -> global fit 
+                                                                block_vectorised_gpu = False, # Block vectorised mode, better for small batches -> global fit
                                                                 gf_mode = True, # Use the GF mode, allowing for one PSD and DATA array per walker.
                                                                 )
 
-
-        # Data is held constant during the PE process. 
-        
-        # shape (#nWalkers) Compute d_d for each walker. 
-        # data , PSD: (#nWalkers, #nT, #nF, #nChannels)
-        self.d_d = 4*self.xp.abs(self.xp.sum(self.data.conjugate() * self.data / self.psd * self.dF,axis=(1,2,3))).real
-        
         # Waveform-only generator (non-gf_mode), built lazily in compute_time_frequency_waveform.
         # Only used for the residuals at the last step.
         self.waveform_gen_object = None
 
-    def compute_time_frequency_waveform(self, params):
+    def to_gwtf_layout(self, arr, fill=0.0):
         """
-        Compute the time-frequency waveform for each source. 
+        Map a lisatools STFT array onto the gwtf grid. 
+        Used for both the data and the PSD. (data below settings.ind_min is zero-filled, PSD below settings.ind_min is filled with xp.inf.)
+        TODO: Would not be needed if could assign f_min in the gwtf generator, but that is not currently supported.
+        
+        - Reshape from ([#nWalkers,] #nChannels, #nT, #NF_active) to ([#nWalkers,] #nT, #nF, #nChannels)
+        - Fill the gwtf bins below settings.ind_min with fill.
 
+        Parameters:
+            arr: ([#nWalkers,] #nChannels, #nT, #NF_active) array on the active band settings.ind_min..settings.ind_max.
+                 The walker axis is optional.
+            fill: value for the gwtf bins below settings.ind_min. Use 0 for data and np.inf for the PSD.
+
+        Returns:
+            ([#nWalkers,] #nT, #nF, #nChannels) array on the gwtf grid (STFT bins 1..settings.ind_max).
+        """
+        arr = self.xp.asarray(arr)
+
+        # First STFT bin in the active band. arr[..., i] is STFT bin ind_min + i, at frequency (ind_min + i)*dF.
+        ind_min = self.settings.ind_min
+
+        # Check that arr is (#nChannels, #nT, #NF_active), optionally with a leading walker axis.
+        assert arr.ndim in (3, 4) and arr.shape[-3:] == (3, self.nT, self.settings.NF_active), (
+            f"Expected shape ([nWalkers,] 3, {self.nT}, {self.settings.NF_active}), got {arr.shape}."
+        )
+
+        # ([#nWalkers,] #nChannels, #nT, #nF) array on the gwtf grid, every bin set to fill until overwritten below.
+        # The slicing below only touches the last (frequency) axis, so it works with or without the walker axis.
+        out = self.xp.full(arr.shape[:-1] + (self.nF,), fill, dtype=arr.dtype)
+
+        # The STFT grid starts at DC (STFT bin j is at j*dF), the gwtf grid starts at dF (gwtf bin k is at (k+1)*dF).
+        # So STFT bin j goes to gwtf bin j-1.
+        if ind_min >= 1:
+            out[..., ind_min - 1:] = arr          # pad below the band, gwtf bins 0..ind_min-2 keep fill
+        else:
+            out[..., :] = arr[..., 1:]            # drop DC, it has no gwtf bin
+
+        # (#nChannels, #nT, #nF) -> (#nT, #nF, #nChannels)
+        if out.ndim == 3:
+            return out.transpose(1, 2, 0)
+        # (#nWalkers, #nChannels, #nT, #nF) -> (#nWalkers, #nT, #nF, #nChannels)
+        return out.transpose(0, 2, 3, 1)
+
+    def _split_parameters(self, params):
+        """
         params: (#nSources, 11) array of parameters, where the columns are:
         0: Mc, 1: eta, 2: cosinc, 3: D (Mpc), 4: f0, 5: s1, 6: s2, 7: phi_coal, 8: psi, 9: sky_lon (RA), 10: sky_lat (DEC)
 
-        Returns waveform_array of shape (#nSources, #nT, #nF, #nChannels)
+        Returns the gwtf waveform and response parameter arrays.
         """
         params = self.xp.asarray(params)
 
@@ -123,6 +165,18 @@ class GWTF_generator:
 
         wf_params = self.xp.column_stack((M, eta, cosinc, D, f0, s1, s2, phi_coal))
         resp_params = self.xp.column_stack((cosinc, psi, sky_lon, sky_lat))
+
+        return wf_params, resp_params
+
+    def compute_time_frequency_waveform(self, params):
+        """
+        Compute the time-frequency waveform for each source.
+
+        params: (#nSources, 11) array of parameters, see _split_parameters.
+
+        Returns waveform_array of shape (#nSources, #nT, #nF, #nChannels)
+        """
+        wf_params, resp_params = self._split_parameters(params)
 
         # gf_mode only supports the inner-product kernels, so waveforms come from a separate
         # non-gf_mode generator on the same grid/orbits. Built on first use, no data/PSD needed.
@@ -142,42 +196,26 @@ class GWTF_generator:
 
         return waveform_array
 
-    def compute_inner_products_per_segment(self, params, data_indices):
+    def compute_inner_products_per_segment(self, params, data_indices, data, psd):
         """
         Per time-segment inner products.
 
-        params: (#nSources, 11) array of parameters, where the columns are:
-        0: Mc, 1: eta, 2: cosinc, 3: D (Mpc), 4: f0, 5: s1, 6: s2, 7: phi_coal, 8: psi, 9: sky_lon (RA), 10: sky_lat (DEC)
+        params: (#nSources, 11) array of parameters, see _split_parameters.
 
         data_indices: (#nSources,) array of indices corresponding to walker for the data and psd arrays for each source.
 
+        data, psd: (#nWalkers, #nT, #nF, #nChannels) on the gwtf grid.
+
         Returns d_h, h_h each of shape (#nSources, #nT).
         """
-        params = self.xp.asarray(params)
+        wf_params, resp_params = self._split_parameters(params)
 
-        Mc = params[:,0]
-        eta = params[:,1]
-        cosinc = params[:,2]
-        D = params[:,3]*1.e+6 # Convert distance from Mpc to pc
-        f0 = params[:,4]
-        s1 = params[:,5]
-        s2 = params[:,6]
-        phi_coal = params[:,7]
-        psi = params[:,8]
-        sky_lon = params[:,9] # RA. in radians
-        sky_lat = params[:,10] # DEC. in radians
-
-        M = Mc * (eta)**(-3/5)
-
-        wf_params = self.xp.column_stack((M, eta, cosinc, D, f0, s1, s2, phi_coal))
-        resp_params = self.xp.column_stack((cosinc, psi, sky_lon, sky_lat))
-
-        # NOTE:  nWalkers <= nSources, as we have nTemps. Where nWalkers x nTemps = nSources. 
+        # NOTE:  nWalkers <= nSources, as we have nTemps. Where nWalkers x nTemps = nSources.
 
         # Contains the inner product statistics for each source, shape (nSources, nT, 2) -> (d_h, h_h) per segment.
         statistic_array = self.inner_product_statistics_object(parameters=wf_params,#(#nSources)
-                                        channels=self.data, #(#nWalkers, #nT, #nF, #nChannels)
-                                        psds=self.psd,#(#nWalkers, #nT, #nF, #nChannels)
+                                        channels=self.xp.asarray(data), #(#nWalkers, #nT, #nF, #nChannels)
+                                        psds=self.xp.asarray(psd),#(#nWalkers, #nT, #nF, #nChannels)
                                         parameters_response=resp_params,
                                         out = None,
                                         compute_statistic=True,
@@ -186,20 +224,16 @@ class GWTF_generator:
         return statistic_array[:,:,0], statistic_array[:,:,1]
 
 
-    def compute_inner_products(self, params, data_indices):
+    def compute_inner_products(self, params, data_indices, data, psd):
         """
         Log-likelihood per source, same inputs as compute_inner_products_per_segment.
         """
         data_indices = self.xp.asarray(data_indices)
 
-        d_h, h_h = self.compute_inner_products_per_segment(params, data_indices)
+        d_h, h_h = self.compute_inner_products_per_segment(params, data_indices, data, psd)
 
         d_h_per_source = self.xp.sum(d_h, axis=1)
         h_h_per_source = self.xp.sum(h_h, axis=1)
-        log_likelihoods = -0.5 * (self.d_d[data_indices] + h_h_per_source.real - 2*d_h_per_source.real)
+        log_likelihoods = -0.5 * (h_h_per_source.real - 2*d_h_per_source.real)
 
         return log_likelihoods
-
-
-    def compute_waveform(self, ):
-        pass
