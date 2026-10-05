@@ -13,8 +13,9 @@ from pygwtf.models import TaylorT3Spin
 from pygwtf.generator import AnalyticTimeFrequencyWaveform
 
 from ...utils.constants import C_SI
+from ...utils.utility import asnumpy
 from ...detector import Orbits
-from ...domains import STFTSettings
+from ...domains import STFTSettings, STFTSignal
 
 class GWTF_generator:
 
@@ -152,7 +153,9 @@ class GWTF_generator:
 
         params: (#nSources, 11) array of parameters, see _split_parameters.
 
-        Returns waveform_array of shape (#nSources, #nT, #nF, #nChannels)
+        Returns: stft_waveform_filled (list)
+        1. Each element of the list corresponds to a source.
+        2. Each element is a STFTSignal object, which contains the time-frequency waveform
         """
         wf_params, resp_params = self._split_parameters(params)
 
@@ -172,7 +175,16 @@ class GWTF_generator:
                                                   out=None,
                                                   compute_statistic=False)
 
-        return waveform_array
+        # gwtf layout -> lisatools layout: (nSources, nTimes, nF, nChannels) -> (nSources, nChannels, nTimes, nF)
+        arr = waveform_array.transpose(0, 3, 1, 2)
+        # move to whichever backend the settings use (np.asarray refuses cupy input, so go through asnumpy)
+        arr = self.settings.xp.asarray(arr) if self.settings.backend.uses_cupy else asnumpy(arr)
+
+        # Create a list of STFTSignal objects, one for each source.
+        stft_waveform_filled = [STFTSignal(arr[source_num], self.settings) for source_num in range(arr.shape[0])]
+        
+        return stft_waveform_filled
+
 
     def compute_inner_products_per_segment(self, params, data_indices, data, psd):
         """
