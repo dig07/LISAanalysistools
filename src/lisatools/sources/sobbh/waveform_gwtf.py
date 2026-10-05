@@ -17,6 +17,11 @@ from ...utils.utility import asnumpy
 from ...detector import Orbits
 from ...domains import STFTSettings, STFTSignal
 
+# XYZ -> AET, orthonormal (so AET -> XYZ is the transpose). Rows are A, E, T.
+M_AET = np.array([[-1, 0, 1] / np.sqrt(2),
+                  [1, -2, 1] / np.sqrt(6),
+                  [1, 1, 1] / np.sqrt(3)])
+
 class GWTF_generator:
 
     def __init__(self,
@@ -36,6 +41,14 @@ class GWTF_generator:
         The gwtf grid therefore covers lisatools STFT bins 1..settings.ind_max, and bins below settings.ind_min
         (outside the active band) are zero-filled in the data and given infinite PSD by to_gwtf_layout.
         """
+
+        # Constructor arguments, used by MultiGPUResidualAddRemoveMove to build one replica per GPU
+        # (it rebuilds the generator as GWTF_generator(**self.kwargs) with "orbits" swapped for that device's orbits).
+        self.kwargs = dict(settings=settings,
+                           orbits=orbits,
+                           T_obs=T_obs,
+                           fresnel_kernel_width=fresnel_kernel_width,
+                           use_GPU=use_GPU)
 
         self.settings = settings
 
@@ -119,6 +132,51 @@ class GWTF_generator:
         # (#nWalkers, #nChannels, #nT, #nF) -> (#nWalkers, #nT, #nF, #nChannels)
         return out.transpose(0, 2, 3, 1)
 
+    def to_gwtf_layout_from_xyz(self, data_xyz):
+        """
+        Map lisatools XYZ STFT data (e.g. the global-fit residuals) onto the gwtf grid in AET.
+
+        Parameters:
+            data_xyz: ([#nWalkers,] 3 XYZ, #nT, #NF_active) complex array.
+        Returns:
+            ([#nWalkers,] #nT, #nF, 3 AET) contiguous complex array on self.xp.
+        """
+        data_xyz = self.xp.asarray(data_xyz)
+        M = self.xp.asarray(M_AET)
+        data_aet = self.xp.einsum("ci,...itf->...ctf", M, data_xyz) # ([nW,] 3 AET, nT, NF_active)
+        return self.xp.ascontiguousarray(self.to_gwtf_layout(data_aet))
+
+    def psd_aet_from_invC(self, invC):
+        """
+        Diagonal AET PSD on the gwtf grid from the lisatools XYZ inverse covariance.
+
+        Inverts invC to the XYZ covariance per (segment, bin), rotates it to AET and keeps the
+        (real) diagonal. Exact only if the noise is diagonal in AET (equal arms); the off-diagonal
+        AET terms are dropped. Bins with f <= 0 are not invertible and never used, so they get an
+        infinite PSD.
+
+        Parameters:
+            invC: ([#nWalkers,] 3, 3, #nT, #NF_active) XYZ inverse covariance.
+        Returns:
+            ([#nWalkers,] #nT, #nF, 3 AET) contiguous real array on self.xp.
+        """
+        invC = self.xp.asarray(invC)
+        batched = invC.ndim == 5
+        if not batched:
+            invC = invC[None]
+
+        M = self.xp.asarray(M_AET)
+        fpos = self.xp.asarray(self.settings.f_arr) > 0
+        S_aet = self.xp.full((invC.shape[0], 3) + invC.shape[-2:], self.xp.inf)  # (nW, 3 AET, nT, NF_active)
+        # One walker at a time: the batched 3x3 inverse needs a full (nT, NF_active, 3, 3) temporary.
+        for w in range(invC.shape[0]):
+            C_xyz = self.xp.linalg.inv(self.xp.moveaxis(invC[w][:, :, :, fpos], (0, 1), (-2, -1)))  # (nT, nF_pos, 3, 3)
+            S_aet[w][..., fpos] = self.xp.einsum("ci,klij,cj->ckl", M, C_xyz, M).real
+            del C_xyz
+
+        out = self.xp.ascontiguousarray(self.to_gwtf_layout(S_aet))  # (nW, nT, nF, 3 AET)
+        return out if batched else out[0]
+
     def _split_parameters(self, params):
         """
         params: (#nSources, 11) array of parameters, where the columns are:
@@ -147,11 +205,13 @@ class GWTF_generator:
 
         return wf_params, resp_params
 
-    def compute_time_frequency_waveform(self, params):
+    def compute_time_frequency_waveform(self, params, channel_basis="AET"):
         """
         Compute the time-frequency waveform for each source.
 
         params: (#nSources, 11) array of parameters, see _split_parameters.
+
+        channel_basis: "AET" (gwtf's native output) or "XYZ" (the basis of the lisatools data/residuals).
 
         Returns: stft_waveform_filled (list)
         1. Each element of the list corresponds to a source.
@@ -177,6 +237,11 @@ class GWTF_generator:
 
         # gwtf layout -> lisatools layout: (nSources, nTimes, nF, nChannels) -> (nSources, nChannels, nTimes, nF)
         arr = waveform_array.transpose(0, 3, 1, 2)
+        if channel_basis == "XYZ":
+            # M_AET is orthonormal, so AET -> XYZ is its transpose (inverse of a orthonormal matrix is its transpose).
+            arr = self.xp.einsum("ci,sctf->sitf", self.xp.asarray(M_AET), arr)
+        elif channel_basis != "AET":
+            raise ValueError(f"channel_basis must be 'AET' or 'XYZ', got {channel_basis!r}.")
         # move to whichever backend the settings use (np.asarray refuses cupy input, so go through asnumpy)
         arr = self.settings.xp.asarray(arr) if self.settings.backend.uses_cupy else asnumpy(arr)
 
@@ -185,6 +250,26 @@ class GWTF_generator:
         
         return stft_waveform_filled
 
+    def get_signal_for_residual(self, *params):
+        """
+        Waveform for residual add/remove in the global fit (the move's waveform_gen_method).
+
+        params: the 11 parameters in _split_parameters order, as separate arguments. Either scalars
+                (one source, the move's expose/fold-back path) or equal-length 1-D arrays (a batch,
+                the move's get_waveforms_here path).
+
+        Returns a single STFTSignal for scalar input, else a list of STFTSignal, one per source.
+        Signals are in XYZ (the basis of the lisatools residuals) on the settings backend.
+        """
+        if len(params) != 11:
+            raise ValueError(f"Expected 11 parameters, got {len(params)}.")
+
+        single = all(np.ndim(p) == 0 for p in params)
+        params_arr = self.xp.stack([self.xp.atleast_1d(self.xp.asarray(p, dtype=self.xp.float64)) for p in params], axis=1) # (nSources, 11)
+
+        signals = self.compute_time_frequency_waveform(params_arr, channel_basis="XYZ")
+
+        return signals[0] if single else signals
 
     def compute_inner_products_per_segment(self, params, data_indices, data, psd):
         """
