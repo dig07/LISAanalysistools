@@ -44,11 +44,11 @@ class GWTF_generator:
         self.nT = settings.NT # Number of time segments
         # nF here is not the same as settings.NF_active, as the gwtf grid always starts at dF (no DC bin) and goes up to settings.ind_max.
         # LISAtools uses a more general (and better) setup where the STFT grid starts at settings.ind_min and goes up to settings.ind_max, and the active band is settings.ind_min..settings.ind_max.
-        self.nF = settings.ind_max # Number of gwtf frequency bins, STFT bins 1..ind_max
+        self.nF = settings.NF_active # Number of gwtf frequency bins, STFT bins ind_min..ind_max (must match the data/PSD width: gwtf does not check this at call time)
 
         # gwtf t=0 is the start of the first segment, i.e. settings.t0 (= t_init + 850.5 + pad_trim)
         self.t_grid = settings.t0 + np.arange(self.nT + 1) * self.dT # (nT+1,) segment edges for GWTF
-        self.f_grid = (np.arange(self.nF) + 1) * self.dF # (nF,) central frequency grid for GWTF
+        self.f_grid = settings.f_arr # (nF,) central frequency grid for GWTF
 
         self.T_obs = T_obs # Observation time in seconds.
 
@@ -67,6 +67,7 @@ class GWTF_generator:
                   'nF':self.nF,
                   'dT':self.dT,
                   'dF':self.dF,
+                  'fmin': float(settings.f_arr[0]),        # centre of active bin 0 = ind_min*dF
                   'kernel_width':fresnel_kernel_width}
 
         if use_GPU:
@@ -96,43 +97,20 @@ class GWTF_generator:
         # Only used for the residuals at the last step.
         self.waveform_gen_object = None
 
-    def to_gwtf_layout(self, arr, fill=0.0):
+    def to_gwtf_layout(self, arr):
         """
         Map a lisatools STFT array onto the gwtf grid. 
-        Used for both the data and the PSD. (data below settings.ind_min is zero-filled, PSD below settings.ind_min is filled with xp.inf.)
-        TODO: Would not be needed if could assign f_min in the gwtf generator, but that is not currently supported.
+        Used for both the data and the PSD.
         
         - Reshape from ([#nWalkers,] #nChannels, #nT, #NF_active) to ([#nWalkers,] #nT, #nF, #nChannels)
-        - Fill the gwtf bins below settings.ind_min with fill.
 
         Parameters:
             arr: ([#nWalkers,] #nChannels, #nT, #NF_active) array on the active band settings.ind_min..settings.ind_max.
                  The walker axis is optional.
-            fill: value for the gwtf bins below settings.ind_min. Use 0 for data and np.inf for the PSD.
-
         Returns:
             ([#nWalkers,] #nT, #nF, #nChannels) array on the gwtf grid (STFT bins 1..settings.ind_max).
         """
-        arr = self.xp.asarray(arr)
-
-        # First STFT bin in the active band. arr[..., i] is STFT bin ind_min + i, at frequency (ind_min + i)*dF.
-        ind_min = self.settings.ind_min
-
-        # Check that arr is (#nChannels, #nT, #NF_active), optionally with a leading walker axis.
-        assert arr.ndim in (3, 4) and arr.shape[-3:] == (3, self.nT, self.settings.NF_active), (
-            f"Expected shape ([nWalkers,] 3, {self.nT}, {self.settings.NF_active}), got {arr.shape}."
-        )
-
-        # ([#nWalkers,] #nChannels, #nT, #nF) array on the gwtf grid, every bin set to fill until overwritten below.
-        # The slicing below only touches the last (frequency) axis, so it works with or without the walker axis.
-        out = self.xp.full(arr.shape[:-1] + (self.nF,), fill, dtype=arr.dtype)
-
-        # The STFT grid starts at DC (STFT bin j is at j*dF), the gwtf grid starts at dF (gwtf bin k is at (k+1)*dF).
-        # So STFT bin j goes to gwtf bin j-1.
-        if ind_min >= 1:
-            out[..., ind_min - 1:] = arr          # pad below the band, gwtf bins 0..ind_min-2 keep fill
-        else:
-            out[..., :] = arr[..., 1:]            # drop DC, it has no gwtf bin
+        out = self.xp.asarray(arr)          # ([nW,] 3, nT, NF_active)
 
         # (#nChannels, #nT, #nF) -> (#nT, #nF, #nChannels)
         if out.ndim == 3:
