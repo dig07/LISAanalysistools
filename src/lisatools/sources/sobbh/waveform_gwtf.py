@@ -153,7 +153,7 @@ class GWTF_generator:
         Inverts invC to the XYZ covariance per (segment, bin), rotates it to AET and keeps the
         (real) diagonal. Exact only if the noise is diagonal in AET (equal arms); the off-diagonal
         AET terms are dropped. Bins with f <= 0 are not invertible and never used, so they get an
-        infinite PSD.
+        infinite PSD. 
 
         Parameters:
             invC: ([#nWalkers,] 3, 3, #nT, #NF_active) XYZ inverse covariance.
@@ -166,11 +166,16 @@ class GWTF_generator:
             invC = invC[None]
 
         M = self.xp.asarray(M_AET)
+        # Isolate the positive frequency bins, as the negative frequencies are not invertible and never used.
         fpos = self.xp.asarray(self.settings.f_arr) > 0
+
         S_aet = self.xp.full((invC.shape[0], 3) + invC.shape[-2:], self.xp.inf)  # (nW, 3 AET, nT, NF_active)
-        # One walker at a time: the batched 3x3 inverse needs a full (nT, NF_active, 3, 3) temporary.
+
+        # One walker at a time (PSD is unique per walker): the batched 3x3 inverse needs a full (nT, NF_active, 3, 3) temporary.
         for w in range(invC.shape[0]):
+            # Only taking the diagonal of the AET covariance. 
             C_xyz = self.xp.linalg.inv(self.xp.moveaxis(invC[w][:, :, :, fpos], (0, 1), (-2, -1)))  # (nT, nF_pos, 3, 3)
+
             S_aet[w][..., fpos] = self.xp.einsum("ci,klij,cj->ckl", M, C_xyz, M).real
             del C_xyz
 
@@ -250,12 +255,11 @@ class GWTF_generator:
         
         return stft_waveform_filled
 
-    def get_signal_for_residual(self, *params):
+    def get_signal_for_residuals(self, *params):
         """
         Waveform for residual add/remove in the global fit (the move's waveform_gen_method).
-
         params: the 11 parameters in _split_parameters order, as separate arguments. Either scalars
-                (one source, the move's expose/fold-back path) or equal-length 1-D arrays (a batch,
+                (one source) or equal-length 1-D arrays (a batch,
                 the move's get_waveforms_here path).
 
         Returns a single STFTSignal for scalar input, else a list of STFTSignal, one per source.
@@ -264,9 +268,14 @@ class GWTF_generator:
         if len(params) != 11:
             raise ValueError(f"Expected 11 parameters, got {len(params)}.")
 
+        # Check if its batched or single 
         single = all(np.ndim(p) == 0 for p in params)
+
+        # Rewire into the (#nSources, 11) array of parameters, where the columns are:
+        # 0: Mc, 1: eta, 2: cosinc, 3: D (Mpc), 4: f0, 5: s1, 6: s2, 7: phi_coal, 8: psi, 9: sky_lon (RA), 10: sky_lat (DEC)
         params_arr = self.xp.stack([self.xp.atleast_1d(self.xp.asarray(p, dtype=self.xp.float64)) for p in params], axis=1) # (nSources, 11)
 
+        # Compute the time-frequency waveform in XYZ (the basis of the lisatools residuals) on the settings backend.
         signals = self.compute_time_frequency_waveform(params_arr, channel_basis="XYZ")
 
         return signals[0] if single else signals
@@ -301,7 +310,16 @@ class GWTF_generator:
 
     def compute_inner_products(self, params, data_indices, data, psd):
         """
-        Log-likelihood per source, same inputs as compute_inner_products_per_segment.
+        Compute inner products <d|h> and <h|h> for each source, summed over time segments.
+
+        Args:
+            params: (#nSources, 11) array of parameters, see _split_parameters.
+            data_indices: (#nSources,) array of indices corresponding to walker for the data and psd arrays for each source.
+            data, psd: (#nWalkers, #nT, #nF, #nChannels) on the gwtf grid.
+
+        Returns d_h_per_source, h_h_per_source each of shape (#nSources,).
+
+
         """
         data_indices = self.xp.asarray(data_indices)
 
@@ -309,6 +327,6 @@ class GWTF_generator:
 
         d_h_per_source = self.xp.sum(d_h, axis=1)
         h_h_per_source = self.xp.sum(h_h, axis=1)
-        log_likelihoods = -0.5 * (h_h_per_source.real - 2*d_h_per_source.real)
+        # log_likelihoods = -0.5 * (h_h_per_source.real - 2*d_h_per_source.real)
 
-        return log_likelihoods
+        return d_h_per_source, h_h_per_source
