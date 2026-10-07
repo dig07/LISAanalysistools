@@ -30,6 +30,9 @@ try:
 except ImportError:
     flow_move_available = False
 
+    class ConditionalFlowMove:  # placeholder so isinstance checks are simply False
+        pass
+
 from eryn.moves import Move, StretchMove, TemperatureControl, RedBlueMove
 from eryn.prior import ProbDistContainer
 from eryn.utils.transform import TransformContainer

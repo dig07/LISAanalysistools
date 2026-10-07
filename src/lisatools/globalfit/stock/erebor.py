@@ -534,7 +534,20 @@ def m1_m2_to_mT_Q(m1, m2):
     return (m1 + m2, m1 / m2)
 
 
-from bbhx.utils.transform import LISA_to_SSB, SSB_to_LISA, mT_q  # frame helpers kept for settings files; the stock MBH basis is direct ICRS
+# Frame helpers kept for settings files; the stock MBH basis is direct ICRS.
+# bbhx is optional (only MBH branches need it); stubs raise on first use.
+try:
+    from bbhx.utils.transform import LISA_to_SSB, SSB_to_LISA, mT_q
+except ImportError as _bbhx_err:
+    def _bbhx_missing(name, err):
+        def _stub(*args, **kwargs):
+            raise ImportError(f"{name} requires bbhx, which is not installed.") from err
+        _stub.__name__ = name
+        return _stub
+
+    LISA_to_SSB = _bbhx_missing("LISA_to_SSB", _bbhx_err)
+    SSB_to_LISA = _bbhx_missing("SSB_to_LISA", _bbhx_err)
+    mT_q = _bbhx_missing("mT_q", _bbhx_err)
 from eryn.moves import Move
 
 
@@ -1250,6 +1263,179 @@ class SOBBHSetup(Setup):
 
     def init_state_backend_info(self):
         """Default the SOBBH state and backend to :class:`SOBBHState` / :class:`SOBBHHDFBackend`."""
+        if self.branch_state is None:
+            self.branch_state = SOBBHState
+
+        if self.branch_backend is None:
+            self.branch_backend = SOBBHHDFBackend
+
+
+# Sampling basis of the gwtf (time-frequency) SOBBH branch. Identical to the
+# ``GWTF_generator`` parameter order (``waveform_gwtf._split_parameters``) and to
+# the output of ``recipe.sobhb_catalogue_to_sampling_basis``.
+SOBBHTF_BASIS = [
+    "Mc",        # chirp mass (Msun, SSB frame)
+    "eta",       # symmetric mass ratio
+    "cosinc",    # cos(inclination)
+    "dist",      # luminosity distance (Mpc)
+    "f0",        # GW frequency (Hz) at the start of the data (gwtf t=0)
+    "s1",        # primary aligned spin
+    "s2",        # secondary aligned spin
+    "phi_coal",  # coalescence phase
+    "psi",       # polarisation angle (ICRS)
+    "ra",        # right ascension (ICRS)
+    "dec",       # declination (ICRS)
+]
+
+
+def make_sobbhtf_transform_container():
+    """Identity :class:`TransformContainer` for the gwtf SOBBH branch.
+
+    The sampling basis is the ``GWTF_generator`` basis, so ``both_transforms``
+    only reorders/copies. It still has to be a real container: the add/remove
+    move and ``subtract_initial_signal`` call ``transform.both_transforms``.
+
+    For now this is basically the identity transform. But for sampling should be extended. 
+    """
+    return TransformContainer(
+        input_basis=SOBBHTF_BASIS,
+        output_basis=SOBBHTF_BASIS,
+    )
+
+
+@dataclasses.dataclass
+class SOBBHTFSettings(Settings):
+    """Settings dataclass for the gwtf (time-frequency) SOBBH branch.
+
+    Mirrors :class:`SOBBHSettings` but in the ``GWTF_generator`` conventions:
+    11 params ``Mc, eta, cosinc, dist [Mpc], f0 [Hz, at data start], s1, s2,
+    phi_coal, psi, ra, dec`` (sky/polarisation in ICRS), sampled directly
+    with an identity transform.
+
+    ``branch_name`` is the key used for ``priors`` / ``periodic``; it must
+    match the branch name the recipe and ``GlobalFitSettings.source_info`` use.
+    """
+
+    branch_name: str = "sobbh"
+    Mc_lims: typing.List[float] = dataclasses.field(default_factory=list)
+    eta_lims: typing.List[float] = dataclasses.field(default_factory=list)
+    dist_lims: typing.List[float] = dataclasses.field(default_factory=list)
+    f0_lims: typing.List[float] = dataclasses.field(default_factory=list)
+    s1_lims: typing.List[float] = dataclasses.field(default_factory=list)
+    s2_lims: typing.List[float] = dataclasses.field(default_factory=list)
+    cosinc_lims: typing.List[float] = dataclasses.field(default_factory=list)
+    phi_coal_lims: typing.List[float] = dataclasses.field(default_factory=list)
+    psi_lims: typing.List[float] = dataclasses.field(default_factory=list)
+    ra_lims: typing.List[float] = dataclasses.field(default_factory=list)
+    dec_lims: typing.List[float] = dataclasses.field(default_factory=list)
+    # GWTF_generator.get_signal_for_residuals takes no kwargs, and
+    # subtract_initial_signal splats these into it -> must stay a (empty) dict.
+    waveform_kwargs: dict = dataclasses.field(default_factory=dict)
+    injection: Optional[np.ndarray] = None
+    fill_values: np.ndarray = dataclasses.field(default_factory=lambda: np.array([]))
+    betas: Optional[np.ndarray] = None
+    inner_moves: Optional[typing.List[Move]] = None
+    num_prop_repeats: Optional[int] = 10
+
+
+class SOBBHTFSetup(Setup):
+    """:class:`Setup` for the gwtf (time-frequency) SOBBH branch.
+
+    Args:
+        sobbhtf_settings: Settings dataclass with gwtf SOBBH parameter ranges
+            and sampling knobs.
+    """
+
+    def __init__(self, sobbhtf_settings: SOBBHTFSettings):
+        super().__init__(sobbhtf_settings)
+
+        level = logging.DEBUG
+        name = "SOBBHTFSetup"
+        self.logger = init_logger(
+            filename="sobbhtf_setup.log",
+            level=level,
+            name=name,
+            log_dir=getattr(self, "log_dir", None),
+        )
+
+        self.init_setup()
+
+    def init_sampling_info(self):
+        """Build the identity transform, prior, periodicity and defaults.
+
+        ``betas`` is left as given: ``None`` lets the recipe build a ladder
+        matching the general ``ntemps`` (``make_ladder``).
+        """
+        if self.waveform_kwargs is None:
+            self.waveform_kwargs = {}
+
+        if self.transform is None:
+            self.transform = make_sobbhtf_transform_container()
+
+        if self.periodic is None:
+            self.periodic = {
+                self.branch_name: {
+                    "phi_coal": 2 * np.pi,
+                    "psi": np.pi,
+                    "ra": 2 * np.pi,
+                }
+            }
+
+        self.setup_priors(SOBBHTF_BASIS)
+
+        if self.betas is not None:
+            self.logger.info(f"Using betas: {self.betas} in SOBBHTF branch")
+
+        if self.other_tempering_kwargs is None:
+            self.other_tempering_kwargs = dict(permute=False)
+
+        if "permute" not in self.other_tempering_kwargs:
+            self.other_tempering_kwargs["permute"] = False
+
+        assert not self.other_tempering_kwargs["permute"]
+
+        if self.initialize_kwargs is None:
+            self.initialize_kwargs = {}
+
+        if self.inner_moves is None:
+            from eryn.moves import StretchMove
+
+            self.inner_moves = [(StretchMove(), 1.0)]
+
+    def setup_priors(self, input_basis):
+        """Build the gwtf SOBBH prior dictionary, overriding ranges from settings."""
+        priors_sobbhtf = {
+            "Mc": uniform_dist(1.0, 200.0),              # chirp mass (Msun)
+            "eta": uniform_dist(0.01, 0.2499999),             # symmetric mass ratio
+            "cosinc": uniform_dist(-1.0, 1.0),           # cos(inclination)
+            "dist": uniform_dist(10.0, 1.0e4),           # luminosity distance (Mpc)
+            "f0": uniform_dist(1.0e-3, 1.0e-1),          # f0 at data start (Hz)
+            "s1": uniform_dist(-0.99, 0.99),             # primary aligned spin
+            "s2": uniform_dist(-0.99, 0.99),             # secondary aligned spin
+            "phi_coal": uniform_dist(0.0, 2 * np.pi),    # coalescence phase
+            "psi": uniform_dist(0.0, np.pi),             # polarisation (ICRS)
+            "ra": uniform_dist(0.0, 2 * np.pi),          # right ascension (ICRS)
+            "dec": uniform_dist(-np.pi / 2, np.pi / 2),  # declination (ICRS)
+        }
+
+        # Every sampling parameter has a ``<name>_lims`` settings field.
+        for key in input_basis:
+            cfg = getattr(self, f"{key}_lims")
+            if cfg is not None and len(cfg) == 2:
+                self.logger.info(f"Setting prior for parameter {key} using limits {cfg}")
+                priors_sobbhtf[key] = uniform_dist(*cfg)
+
+        # ProbDistContainer is positional: keep the sampling-basis order.
+        self.priors = {
+            self.branch_name: ProbDistContainer({k: priors_sobbhtf[k] for k in input_basis})
+        }
+
+    def init_setup(self):
+        self.init_sampling_info()
+        self.init_state_backend_info()
+
+    def init_state_backend_info(self):
+        """Default the state and backend to :class:`SOBBHState` / :class:`SOBBHHDFBackend`."""
         if self.branch_state is None:
             self.branch_state = SOBBHState
 

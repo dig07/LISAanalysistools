@@ -75,7 +75,7 @@ class SOBBHSpecialMove(MultiGPUResidualAddRemoveMove):
                 
     def setup_likelihood_here(self, coords):
         ''''
-        Setup the likelihood for the special move.
+        Setup the likelihood for the sobbh move.
 
         - One split per GPU. 
         - Aribitrary number of walkers per split, on one GPU. 
