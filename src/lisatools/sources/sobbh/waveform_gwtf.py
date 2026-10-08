@@ -22,6 +22,11 @@ M_AET = np.array([[-1, 0, 1] / np.sqrt(2),
                   [1, -2, 1] / np.sqrt(6),
                   [1, 1, 1] / np.sqrt(3)])
 
+# Same bands as SC_Search's DEFAULT_PSD_CLIP_BANDS (TDI transfer-function nulls).
+DEFAULT_PSD_DROP_BANDS = [(0.029, 0.031), (0.059, 0.061), (0.0897, 0.0902)]
+
+
+
 class GWTF_generator:
 
     def __init__(self,
@@ -30,7 +35,7 @@ class GWTF_generator:
                  T_obs,
                  fresnel_kernel_width = 10,
                  use_GPU = True,
-                 ):
+                 psd_drop_bands = DEFAULT_PSD_DROP_BANDS):
         """
         Assumptions:
         - PSD and data are already pre-processed and in the correct shape corresponding to the tf grid provided.
@@ -44,11 +49,16 @@ class GWTF_generator:
 
         # Constructor arguments, used by MultiGPUResidualAddRemoveMove to build one replica per GPU
         # (it rebuilds the generator as GWTF_generator(**self.kwargs) with "orbits" swapped for that device's orbits).
+
+        self.psd_drop_bands = psd_drop_bands
+
         self.kwargs = dict(settings=settings,
                            orbits=orbits,
                            T_obs=T_obs,
                            fresnel_kernel_width=fresnel_kernel_width,
-                           use_GPU=use_GPU)
+                           use_GPU=use_GPU,
+                           psd_drop_bands=self.psd_drop_bands)
+
 
         self.settings = settings
 
@@ -178,6 +188,12 @@ class GWTF_generator:
 
             S_aet[w][..., fpos] = self.xp.einsum("ci,klij,cj->ckl", M, C_xyz, M).real
             del C_xyz
+
+        f = self.xp.asarray(self.settings.f_arr)
+        drop = self.xp.zeros(f.shape, dtype=bool)
+        for f_lo, f_hi in (self.psd_drop_bands or []):
+            drop |= (f >= f_lo) & (f <= f_hi)
+        S_aet[..., drop] = self.xp.inf      # zero information: the bins drop out of <d|h> and <h|h>
 
         out = self.xp.ascontiguousarray(self.to_gwtf_layout(S_aet))  # (nW, nT, nF, 3 AET)
         return out if batched else out[0]

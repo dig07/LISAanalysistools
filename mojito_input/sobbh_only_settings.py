@@ -93,7 +93,7 @@ def setup_recipe(recipe, engine_info, curr, acs, priors, state):
             1e-5,   # Mc
             1e-2,   # eta
             0.1,    # cosinc
-            50.0,   # dist [Mpc]
+            10.0,   # dist [Mpc]
             1e-9,   # f0 [Hz]
             0.1,    # s1
             0.1,    # s2
@@ -270,7 +270,7 @@ def get_general_erebor_settings() -> GeneralSetup:
     base_file_name = "SOBBH_only_MOJITO_light_2p5s_GF_setup"
     file_store_dir = head_dir
 
-    gpus = [2]
+    gpus = [1]
     cp.cuda.runtime.setDevice(gpus[0])
     # Restrict JAX to only see the target GPU — must be set before JAX backend init
     import jax
