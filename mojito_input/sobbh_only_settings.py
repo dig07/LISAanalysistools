@@ -58,44 +58,16 @@ MOJITO_REFERENCE_TIME = 97729089.327664
 
 def setup_recipe(recipe, engine_info, curr, acs, priors, state):
 
-    ## PSD stuff ##
+    # PSD is held fixed at general_info.fixed_psd_kwargs (no "psd" branch), so the
+    # AnalysisContainers are built once with that sensitivity and only SOBBHs are sampled.
 
     cp.cuda.runtime.setDevice(curr.general_info.gpus[0])
 
     general_info = curr.general_info
     nwalkers: int = general_info.nwalkers
     ntemps: int = general_info.ntemps
-    Tmax: float = 1.0e6
-    permute_every: int = 100
 
     sobhb_info = curr.source_info["sobbh"]
-    psd_info = curr.source_info["psd"]
-
-    effective_ndim = engine_info.ndims["psd"]
-    temperature_control = TemperatureControl(
-        effective_ndim, nwalkers, ntemps=ntemps, Tmax=Tmax, permute=False
-    )
-
-    psd_move_kwargs = dict(
-        num_repeats=psd_info.num_prop_repeats,
-        permute_every=permute_every,
-        live_dangerously=True,
-        psd_transform_fn=psd_info.transform,
-        temperature_control=temperature_control,
-        use_gpu=True,
-        run_async=True,
-        run_threaded=True
-    )
-
-    psd_search_move = MultiGPUPSDMove(
-        acs, priors, max_logl_mode=True, name="psd search move", **psd_move_kwargs
-    )
-    psd_pe_move = MultiGPUPSDMove(acs, priors, max_logl_mode=False, name="psd pe move", **psd_move_kwargs)
-
-    psd_search_move.accepted = np.zeros((ntemps, nwalkers))
-    psd_pe_move.accepted = np.zeros((ntemps, nwalkers))
-
-    recipe.add_recipe_component(SearchRecipeStep(moves=[psd_search_move]), name="psd search")
 
     #* ========================= *#
     
@@ -115,8 +87,21 @@ def setup_recipe(recipe, engine_info, curr, acs, priors, state):
         # Store injection truths for diagnostic plots
         curr.source_info["sobbh"].injection = injection_params
 
-        # Per-parameter spread for the Gaussian scatter
-        spread = 1e-8
+        # Per-parameter spread for the Gaussian scatter (absolute, sampling basis).
+        # Order: [Mc, eta, cosinc, dist, f0, s1, s2, phi_coal, psi, ra, dec]
+        spread = np.array([
+            1e-5,   # Mc
+            1e-2,   # eta
+            0.1,    # cosinc
+            50.0,   # dist [Mpc]
+            1e-9,   # f0 [Hz]
+            0.1,    # s1
+            0.1,    # s2
+            0.0,    # phi_coal -> drawn from its prior below
+            0.3,    # psi
+            5e-3,   # ra
+            5e-3,   # dec
+        ])
 
         scatter_around_injection(
             state,
@@ -125,6 +110,11 @@ def setup_recipe(recipe, engine_info, curr, acs, priors, state):
             spread,
             priors=priors,
         )
+
+        # phi_coal is unconstrained and slow-mixing: seed it from its prior rather than at the
+        # catalogue value (fixed to 0, not the gwtf convention), which would freeze it.
+        sobbh_coords = state.branches_coords["sobbh"]
+        sobbh_coords[..., 7] = np.random.uniform(0.0, 2 * np.pi, size=sobbh_coords.shape[:-1])
         
     from lisatools.sources.sobbh.waveform_gwtf import GWTF_generator
 
@@ -169,69 +159,11 @@ def setup_recipe(recipe, engine_info, curr, acs, priors, state):
     sobhb_pe_move = SOBBHSpecialMove(**sobhb_move_kwargs)
     sobhb_pe_move.accepted = np.zeros((ntemps, nwalkers))
 
-    #* =======
-    pe_moves = GFCombineMove(moves=[sobhb_pe_move, psd_pe_move], share_temperature_control=False)
-    recipe.add_recipe_component(PERecipeStep(moves=[pe_moves]), name="sobbh pe")
+    recipe.add_recipe_component(PERecipeStep(moves=[sobhb_pe_move]), name="sobbh pe")
 
 #######################
 ##### SETTINGS ########
 #######################
-
-# PSD settings
-def get_psd_erebor_settings(general_set: GeneralSetup) -> PSDSetup:
-
-    frequency_ranges = [(general_set.start_freq, general_set.end_freq)]
-    prior_model = "uniform"
-    model_config = dict(use_splines=False, num_params=2)  # for now just two parameters, but can be extended to include splines or other features in the future
-
-    if prior_model == "uniform":
-        logger.info("Using uniform prior for PSD parameters.")
-        prior_fn = uniform_dist
-
-    elif prior_model == "log_uniform":
-        logger.info("Using log-uniform prior for PSD parameters.")
-        prior_fn = log_uniform
-    else:
-        raise ValueError(f"Unsupported prior model: {prior_model}")
-    
-    prior_model_config = {
-        "S_oms": (6.0e-12, 20.0e-11),
-        "S_tm": (1.0e-15, 20.0e-14),
-    }
-
-    # waveform kwargs
-    initialize_kwargs_psd = dict()
-
-    priors_psd = {
-        r"$S_{\rm oms}$": prior_fn(*prior_model_config["S_oms"]),  # Soms_d
-        r"$S_{\rm tm}$": prior_fn(*prior_model_config["S_tm"]),  # Sa_a
-    }
-
-    priors = {"psd": ProbDistContainer(priors_psd)}
-
-    injection = np.array([15e-12, 3e-15])  # for diagnostic plots
-
-    psd_settings = PSDSettings(
-        Tobs=general_set.Tobs,
-        dt=general_set.dt,
-        initialize_kwargs=initialize_kwargs_psd,
-        log_dir=general_set.artifacts_file_dir,
-        priors=priors,
-        ndim=2,
-        injection=injection,
-        num_prop_repeats=500,
-    )
-
-    psd_metadata = StochasticMetadata(
-        model_config=model_config,
-        frequency_ranges=frequency_ranges,
-        prior_model=prior_model,
-        prior_model_code_link="",  # todo populate repositories
-        prior_model_config=prior_model_config,
-    )
-
-    return PSDSetup(psd_settings), psd_metadata
-
 
 def get_sobbh_erebor_settings(general_set: GeneralSetup) -> SOBBHTFSetup:
 
@@ -246,7 +178,7 @@ def get_sobbh_erebor_settings(general_set: GeneralSetup) -> SOBBHTFSetup:
     # and gpu_orbits exists. MultiGPUResidualAddRemoveMove rebuilds one replica
     # per GPU from GWTF_generator.kwargs with "orbits" swapped per device.
     use_GPU = gpu_available and general_set.force_backend != "cpu"
-    fresnel_kernel_width = 50  # as validated in dev/SOBBH_move_test.ipynb
+    fresnel_kernel_width = 16  
 
     waveform_init_kwargs = dict(
         settings=general_set.domain_settings,
@@ -260,8 +192,8 @@ def get_sobbh_erebor_settings(general_set: GeneralSetup) -> SOBBHTFSetup:
     waveform_runtime_kwargs = dict()
 
     # None -> setup_recipe builds make_ladder(ndim, ntemps=general ntemps).
-    #TODO: temporary
-    betas = None
+    betas = [1/1.0, 1/1.1, 1/1.22, 1/1.4, 1/1.65, 1/2.0, 1/2.6, 1/3.5]
+
 
     # The catalogue source-type key is "sobhb" (L1ProcessingStep), the branch is "sobbh".
     # Number of leaves is the number of sources in the catalogue. The catalogue is read in setup_recipe.
@@ -276,7 +208,7 @@ def get_sobbh_erebor_settings(general_set: GeneralSetup) -> SOBBHTFSetup:
         nleaves_max=nleaves_max_sobbh,# Fixed dimensionality for the sobbh
         nleaves_min=nleaves_max_sobbh,# Fixed dimensionality for the sobbh
         ndim=11,
-        num_prop_repeats=200,
+        num_prop_repeats=600,
         betas=betas,
         inner_moves=[(StretchMove(), 1.0)],
         # transform / periodic / priors default inside SOBBHTFSetup (identity,
@@ -320,7 +252,7 @@ def get_general_erebor_settings() -> GeneralSetup:
 
     submission_folder = None #"/work/asantini/globalfit/erebor_org_setup/mojito_runs/"
 
-    num_iterations = 5
+    num_iterations = 500
 
     source_ids = dict(
         sobhb=[0, 1, 2, 3, 4, 5]
@@ -335,10 +267,10 @@ def get_general_erebor_settings() -> GeneralSetup:
 
     head_dir = "/data/diganta/Mojito_Search/Integration_GF/Run/"  # trailing slash: paths are built by string concatenation
     data_input_path = "/data/asantini/globalfit/MOJITO_DATA/mojito_light_2p5s/"
-    base_file_name = "SOBBH_PSD_MOJITO_light_2p5s"
+    base_file_name = "SOBBH_only_MOJITO_light_2p5s_GF_setup"
     file_store_dir = head_dir
 
-    gpus = [1]
+    gpus = [2]
     cp.cuda.runtime.setDevice(gpus[0])
     # Restrict JAX to only see the target GPU — must be set before JAX backend init
     import jax
@@ -347,7 +279,7 @@ def get_general_erebor_settings() -> GeneralSetup:
 
     backend = "cuda12x" if gpus is not None else "cpu"
     nwalkers = 10
-    ntemps = 2
+    ntemps = 8
 
     window_type = "tukey"
     window_taper_duration = 864 # s 
@@ -410,6 +342,12 @@ def get_general_erebor_settings() -> GeneralSetup:
         Tobs=Tobs,
     )
 
+    # PSD held at the injected noise levels (Soms_d, Sa_a amplitudes; squared in the kernel)
+    fixed_psd_kwargs = dict(
+        psd_params=[15e-12, 3e-15],
+        galfor_params=None,
+    )
+
     sensitivity_init_kwargs = dict(tdi_generation=2, mask_percentage=0.02, average_transfer_functions=True)
 
     general_settings = GeneralSettings(
@@ -432,6 +370,7 @@ def get_general_erebor_settings() -> GeneralSetup:
         normalize_window=normalize_window,
         sensitivity_backend_class=XYZSensitivityBackend,
         sensitivity_init_kwargs=sensitivity_init_kwargs,
+        fixed_psd_kwargs=fixed_psd_kwargs,
         global_fit_codename=global_fit_codename,
         global_fit_version=global_fit_version,
         global_fit_contact=global_fit_contact,
@@ -478,15 +417,6 @@ def get_global_fit_settings(copy_settings_file=False):
 
     ##################################
     ##################################
-    ###  PSD Settings  ###############
-    ##################################
-    ##################################
-
-    psd_setup, psd_metadata = get_psd_erebor_settings(general_setup)
-
-
-    ##################################
-    ##################################
     ###  SOBBH Settings  ##############
     ##################################
     ##################################
@@ -500,14 +430,12 @@ def get_global_fit_settings(copy_settings_file=False):
     global_settings = GlobalFitSettings(
         source_info={
             "sobbh": sobbh_setup,
-            "psd": psd_setup,
         },
         general_info=general_setup,
         rank_info=rank_info,
         setup_function=setup_recipe,
         source_metadata={
             "sobbh": sobbh_metadata,
-            "psd": psd_metadata,
         }
     )
 

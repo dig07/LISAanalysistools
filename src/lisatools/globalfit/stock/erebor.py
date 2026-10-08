@@ -1408,7 +1408,7 @@ class SOBBHTFSetup(Setup):
             "Mc": uniform_dist(1.0, 200.0),              # chirp mass (Msun)
             "eta": uniform_dist(0.01, 0.2499999),             # symmetric mass ratio
             "cosinc": uniform_dist(-1.0, 1.0),           # cos(inclination)
-            "dist": uniform_dist(10.0, 1.0e4),           # luminosity distance (Mpc)
+            "dist": uniform_dist(10.0, 1000.0),           # luminosity distance (Mpc)
             "f0": uniform_dist(1.0e-3, 1.0e-1),          # f0 at data start (Hz)
             "s1": uniform_dist(-0.99, 0.99),             # primary aligned spin
             "s2": uniform_dist(-0.99, 0.99),             # secondary aligned spin

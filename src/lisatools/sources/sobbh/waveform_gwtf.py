@@ -103,7 +103,7 @@ class GWTF_generator:
                                                                 backend=backend,
                                                                 spacecraft_orbits=self.spacecraft_positions,
                                                                 spacecraft_ltts=self.spacecraft_LTTs,
-                                                                block_vectorised_gpu = False, # Block vectorised mode, better for small batches -> global fit
+                                                                block_vectorised_gpu = True, # Block vectorised mode, better for small batches -> global fit
                                                                 gf_mode = True, # Use the GF mode, allowing for one PSD and DATA array per walker.
                                                                 )
 
