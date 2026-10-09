@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 import numpy as np
 from ...utils.utility import asnumpy
+from ...utils.constants import MTSUN_SI
 from .addremovemove import MultiGPUResidualAddRemoveMove
 
 if TYPE_CHECKING:
@@ -40,8 +41,12 @@ class SOBBHSpecialMove(MultiGPUResidualAddRemoveMove):
         pad_out_of_prior: bool = False,
         run_async: bool = False,
         run_threaded: bool = False,
+        tc_min_days: float = None,
         **kwargs
     ):
+        # Reject proposals merging less than tc_min_days after data start (None = off).
+        self.tc_min_days = tc_min_days
+
         waveform_gen_method: str = "get_signal_for_residuals"
         waveform_like_method: str = "compute_inner_products"
 
@@ -76,10 +81,8 @@ class SOBBHSpecialMove(MultiGPUResidualAddRemoveMove):
     def setup_likelihood_here(self, coords):
         ''''
         Setup the likelihood for the sobbh move.
-
         - One split per GPU. 
         - Aribitrary number of walkers per split, on one GPU. 
-
         '''
 
         super().setup_likelihood_here(coords)            # <d|d> per split -> self.acs.cpp_split(i).d_d
@@ -145,6 +148,13 @@ class SOBBHSpecialMove(MultiGPUResidualAddRemoveMove):
             # I.e. if there were any walkers assigned to this split, fill in their log-likelihoods.
             if len(pos):
                 ll[pos] = out[i]
+
+        # Reject templates merging within tc_min_days (Newtonian tc from Mc, f0).
+        if self.tc_min_days is not None:
+            Mc, f0 = asnumpy(coords_in[:, 0]), asnumpy(coords_in[:, 4])
+            # 0PN merger time in seconds.
+            tc = 5 / 256 * (Mc * MTSUN_SI) ** (-5 / 3) * (np.pi * f0) ** (-8 / 3)
+            ll[tc < self.tc_min_days * 86400] = -1e300
 
         # Guard against any NaN or inf values in the log-likelihood array.
         return np.where(np.isfinite(ll), ll, -1e300)

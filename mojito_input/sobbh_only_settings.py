@@ -154,6 +154,7 @@ def setup_recipe(recipe, engine_info, curr, acs, priors, state):
         run_threaded=True, # threaded allowing for threaded execution of the likelihoods over GPUs. 
         randomize_split=True, # eryn setting 
         batch_size_per_gpu=None, # Maximum number of walkers per GPU to run in parallel. Setting None 
+        tc_min_days=60, # Reject proposals merging less than tc_min_days after data start (None = off).
     )
 
     sobhb_pe_move = SOBBHSpecialMove(**sobhb_move_kwargs)
@@ -208,7 +209,7 @@ def get_sobbh_erebor_settings(general_set: GeneralSetup) -> SOBBHTFSetup:
         nleaves_max=nleaves_max_sobbh,# Fixed dimensionality for the sobbh
         nleaves_min=nleaves_max_sobbh,# Fixed dimensionality for the sobbh
         ndim=11,
-        num_prop_repeats=600,
+        num_prop_repeats=300,
         betas=betas,
         inner_moves=[(StretchMove(), 1.0)],
         # transform / periodic / priors default inside SOBBHTFSetup (identity,
@@ -252,7 +253,7 @@ def get_general_erebor_settings() -> GeneralSetup:
 
     submission_folder = None #"/work/asantini/globalfit/erebor_org_setup/mojito_runs/"
 
-    num_iterations = 500
+    num_iterations = 250
 
     source_ids = dict(
         sobhb=[0, 1, 2, 3, 4, 5]
@@ -267,7 +268,7 @@ def get_general_erebor_settings() -> GeneralSetup:
 
     head_dir = "/data/diganta/Mojito_Search/Integration_GF/Run/"  # trailing slash: paths are built by string concatenation
     data_input_path = "/data/asantini/globalfit/MOJITO_DATA/mojito_light_2p5s/"
-    base_file_name = "SOBBH_only_MOJITO_light_2p5s_GF_setup"
+    base_file_name = "SOBBH_only_MOJITO_light_2p5s_GF_setup_tc_prior"
     file_store_dir = head_dir
 
     gpus = [1]
